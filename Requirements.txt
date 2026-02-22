@@ -1,0 +1,17 @@
+# ── Document parsing ─────────────────────────────────────
+# [all-docs] includes PDF, DOCX, PPTX, XLSX, HTML, image OCR, CSV, TXT etc.
+unstructured[all-docs]
+
+# ── LangChain core + providers ───────────────────────────
+langchain-core
+langchain-google-genai      # Gemini (Tier 1 LLM — vision capable)
+langchain-groq              # Groq / Llama 3.3 (Tier 2 LLM — 14,400 req/day free)
+langchain-huggingface       # Embeddings (sentence-transformers, runs locally)
+langchain-chroma            # Vector store
+
+# ── ML / embeddings ──────────────────────────────────────
+sentence-transformers
+
+# ── App ──────────────────────────────────────────────────
+streamlit
+python-dotenv
