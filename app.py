@@ -978,18 +978,219 @@ Rules:
     return questions
 
 
-def generate_summary(doc_name: str) -> dict:
+def _repair_json(raw: str) -> str:
     """
-    Generate a full structured summary of the indexed document.
-    Uses all processed chunks so nothing is missed.
-    Returns a dict with keys matching the summary sections.
+    Best-effort JSON repair:
+    1. Strip anything before the first { and after the last }
+    2. Remove markdown fences
+    3. If JSON is truncated (common with long LLM output), close any
+       open arrays/objects so json.loads can at least parse what's there.
+    """
+    # remove markdown fences
+    raw = re.sub(r"^```[a-zA-Z]*\n?", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"```\s*$",           "", raw, flags=re.MULTILINE).strip()
+
+    # extract from first { to last }
+    start = raw.find("{")
+    end   = raw.rfind("}")
+    if start == -1:
+        raise ValueError("No JSON object found in response")
+    raw = raw[start: end + 1] if end > start else raw[start:]
+
+    # attempt to close truncated JSON by counting brackets
+    try:
+        json.loads(raw)
+        return raw                      # already valid
+    except json.JSONDecodeError:
+        pass
+
+    # close any open string literals first (truncated mid-string)
+    # count unescaped quotes to see if we're inside a string
+    in_string   = False
+    escape_next = False
+    for ch in raw:
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == "\\":
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+    if in_string:
+        raw += '"'                      # close the open string
+
+    # close open arrays and objects
+    stack = []
+    in_str = False
+    esc    = False
+    for ch in raw:
+        if esc:           esc = False;  continue
+        if ch == "\\":    esc = True;   continue
+        if ch == '"':     in_str = not in_str; continue
+        if in_str:        continue
+        if ch == "{":     stack.append("}")
+        elif ch == "[":   stack.append("]")
+        elif ch in "}]" and stack and stack[-1] == ch:
+            stack.pop()
+
+    raw += "".join(reversed(stack))    # close in reverse order
+
+    return raw
+
+
+def _safe_parse_json(raw: str) -> dict:
+    """Try to parse JSON, applying repair if needed. Always returns a dict."""
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            return json.loads(_repair_json(raw))
+        except Exception:
+            # last resort — return empty structure so UI still renders
+            return {}
+
+
+def _summarise_batch(texts: list, tables: list, images: list,
+                     doc_name: str, batch_num: int, total_batches: int) -> dict:
+    """
+    Summarise one batch of text chunks. Returns a partial summary dict.
+    Batching prevents context-window overflow on long documents.
     """
     from langchain_core.messages import HumanMessage
 
+    joined = "\n\n---\n\n".join(texts)
+    # hard cap per batch — Groq context limit is ~32k tokens (~24k chars safe)
+    if len(joined) > 24_000:
+        joined = joined[:24_000] + "\n\n[truncated for length]"
+
+    table_ctx = ""
+    for i, t in enumerate(tables[:3]):
+        table_ctx += f"\nTABLE {i+1}:\n{t}\n"
+
+    part_note = f"(Part {batch_num} of {total_batches})" if total_batches > 1 else ""
+
+    prompt = f"""You are an expert academic summariser. Summarise the document content below {part_note}.
+
+DOCUMENT: {doc_name}
+
+CONTENT:
+{joined}
+{f"TABLES:{table_ctx}" if table_ctx else ""}
+{f"FIGURES: {len(images)} page image(s) attached." if images else ""}
+
+Return ONLY a valid JSON object — no markdown fences, no explanation, no text outside the JSON.
+If a value would contain a double-quote character, escape it as \\".
+If a value would contain a newline, use \\n.
+
+JSON STRUCTURE:
+{{
+  "topic": "One plain sentence — what is this content about",
+  "plain_english": "Explain this topic from scratch for a student who has never seen it. Build from basics. Write 3-6 paragraphs. Use \\n\\n between paragraphs.",
+  "sections": [
+    {{
+      "title": "Topic or section name",
+      "summary": "Detailed explanation. Use markdown. Use $formula$ for inline math, $$formula$$ for block equations. Cover every idea. Use \\n for line breaks.",
+      "formulas": ["$$...$$"],
+      "key_point": "The single most important takeaway from this section"
+    }}
+  ],
+  "concepts": [
+    {{"term": "Term", "definition": "Simple 1-2 sentence definition"}}
+  ],
+  "tables": [
+    {{"title": "What this table shows", "markdown": "| A | B |\\n|---|---|\\n| x | y |"}}
+  ],
+  "formulas": [
+    {{"label": "Formula name", "latex": "$$...$$", "explanation": "Plain-language meaning"}}
+  ],
+  "takeaways": ["Key point 1", "Key point 2"]
+}}
+
+RULES:
+- sections[] must cover EVERY concept in the content — skip nothing real
+- Each section summary should be thorough paragraphs, not one-liners
+- All math MUST use $ or $$ delimiters
+- takeaways[] = 5-10 items minimum
+- Return ONLY the JSON object. Nothing else."""
+
+    content = [{"type": "text", "text": prompt}]
+    for b64 in images[:2]:
+        mime = "image/png" if b64.startswith("iVBOR") else "image/jpeg"
+        content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+
+    response, _ = invoke_with_fallback([HumanMessage(content=content)])
+    return _safe_parse_json(response.content)
+
+
+def _merge_summaries(parts: list) -> dict:
+    """Merge multiple partial summary dicts into one coherent summary."""
+    if not parts:
+        return {}
+    if len(parts) == 1:
+        return parts[0]
+
+    merged = {
+        "topic":         parts[0].get("topic", ""),
+        "plain_english": "\n\n".join(p.get("plain_english", "") for p in parts if p.get("plain_english")),
+        "sections":      [],
+        "concepts":      [],
+        "tables":        [],
+        "formulas":      [],
+        "takeaways":     [],
+    }
+
+    seen_sections  = set()
+    seen_concepts  = set()
+    seen_formulas  = set()
+    seen_takeaways = set()
+
+    for p in parts:
+        for s in p.get("sections", []):
+            key = s.get("title", "").strip().lower()
+            if key and key not in seen_sections:
+                seen_sections.add(key)
+                merged["sections"].append(s)
+
+        for c in p.get("concepts", []):
+            key = c.get("term", "").strip().lower()
+            if key and key not in seen_concepts:
+                seen_concepts.add(key)
+                merged["concepts"].append(c)
+
+        for t in p.get("tables", []):
+            merged["tables"].append(t)          # tables are always unique
+
+        for f in p.get("formulas", []):
+            key = f.get("label", "").strip().lower()
+            if key and key not in seen_formulas:
+                seen_formulas.add(key)
+                merged["formulas"].append(f)
+
+        for t in p.get("takeaways", []):
+            key = t.strip().lower()[:60]
+            if key and key not in seen_takeaways:
+                seen_takeaways.add(key)
+                merged["takeaways"].append(t)
+
+    return merged
+
+
+def generate_summary(doc_name: str) -> dict:
+    """
+    Generate a full structured summary of the indexed document.
+
+    Strategy:
+    - Collect all unique text chunks and tables
+    - Split into batches of ~20k chars to stay within Groq's context limit
+    - Summarise each batch independently
+    - Merge all partial summaries into one coherent result
+    - Cache key page images for display
+    """
     docs        = st.session_state.processed_chunks
     page_images = st.session_state.get("all_page_images", {})
 
-    # ── Collect all raw text, tables, and images from every chunk ──────────
+    # ── Collect unique texts and tables ───────────────────
     all_texts  = []
     all_tables = []
     seen_text_hashes  = set()
@@ -1010,100 +1211,67 @@ def generate_summary(doc_name: str) -> dict:
                     seen_table_hashes.add(h)
                     all_tables.append(tbl)
 
-    # ── Select visually important pages (up to 6) ──────────────────────────
-    # Strategy: sample evenly across the document but prefer pages with images
+    # ── Select key page images (first, last, evenly spaced) ───────────────
     key_images = []
     if page_images:
         sorted_pages = sorted(page_images.keys())
         total        = len(sorted_pages)
-        # always include first and last page, sample up to 4 more evenly
-        candidates = [sorted_pages[0]]
+        candidates   = [sorted_pages[0]]
         if total > 1:
             step = max(1, total // 5)
             candidates += sorted_pages[1:-1:step]
             candidates.append(sorted_pages[-1])
-        candidates = list(dict.fromkeys(candidates))[:6]   # dedup, cap at 6
+        candidates = list(dict.fromkeys(candidates))[:6]
         key_images = [page_images[p] for p in candidates]
 
-    # ── Build the full document text for the LLM (all chunks concatenated) ──
-    full_text = "\n\n---\n\n".join(all_texts)
+    # ── Batch texts into ~20k char chunks ─────────────────
+    BATCH_CHAR_LIMIT = 20_000
+    batches    = []
+    current    = []
+    current_sz = 0
 
-    # ── Table context (first 4 tables as HTML) ─────────────────────────────
-    table_context = ""
-    for i, t in enumerate(all_tables[:4]):
-        table_context += f"\nTABLE {i+1}:\n{t}\n"
+    for txt in all_texts:
+        if current_sz + len(txt) > BATCH_CHAR_LIMIT and current:
+            batches.append(current)
+            current    = []
+            current_sz = 0
+        current.append(txt)
+        current_sz += len(txt)
+    if current:
+        batches.append(current)
 
-    # ── Prompt ────────────────────────────────────────────────────────────
-    prompt = f"""You are an expert academic summariser. Your job is to produce a thorough, intelligent summary of the document below. 
+    if not batches:
+        batches = [[""]]
 
-The user is a student or learner. They want to understand the document completely — not just get a short blurb. The summary should be as long as needed to cover everything important. Skip unnecessary filler and padding, but never skip a real concept, finding, formula, or key idea.
+    # ── Summarise each batch ───────────────────────────────
+    parts = []
+    total_batches = len(batches)
+    for i, batch_texts in enumerate(batches):
+        # distribute images across batches (2 per batch max)
+        batch_imgs = key_images[i * 2: i * 2 + 2]
+        # tables only on first batch
+        batch_tables = all_tables[:3] if i == 0 else []
+        part = _summarise_batch(
+            batch_texts, batch_tables, batch_imgs,
+            doc_name, i + 1, total_batches
+        )
+        parts.append(part)
 
-DOCUMENT NAME: {doc_name}
+    # ── Merge all parts ────────────────────────────────────
+    summary = _merge_summaries(parts)
 
-FULL DOCUMENT TEXT:
-{full_text}
-
-{f"TABLES IN DOCUMENT:{table_context}" if table_context else ""}
-
-{"FIGURES: " + str(len(key_images)) + " key page image(s) are attached. Identify any significant diagrams, figures, charts, or formulas visible in them." if key_images else ""}
-
-YOUR TASK: Produce a structured JSON summary with EXACTLY these keys:
-
-{{
-  "topic": "What this document is about in ONE plain sentence, no jargon",
-  "plain_english": "Explain the whole topic from scratch as if the reader has never heard of it. Build up from the basics. 2-4 paragraphs.",
-  "sections": [
-    {{
-      "title": "Section or topic name",
-      "summary": "Thorough explanation of everything in this section. Be detailed. Use markdown formatting, LaTeX for formulas ($...$  inline, $$...$$ for block equations). Skip waffle, keep every real idea.",
-      "formulas": ["$$formula1$$", "$$formula2$$"],
-      "key_point": "The single most important thing to understand about this section"
-    }}
-  ],
-  "concepts": [
-    {{"term": "Term name", "definition": "Clear, simple definition. One or two sentences."}}
-  ],
-  "tables": [
-    {{"title": "What this table shows", "markdown": "| Col1 | Col2 |\\n|---|---|\\n| val | val |"}}
-  ],
-  "formulas": [
-    {{"label": "Formula name or what it represents", "latex": "$$...$$", "explanation": "What this formula means in plain terms"}}
-  ],
-  "takeaways": [
-    "The most important thing 1",
-    "The most important thing 2"
-  ]
-}}
-
-STRICT RULES:
-- Return ONLY valid JSON. No markdown fences. No extra text before or after.
-- sections[] must cover EVERY major topic in the document — do not skip anything
-- Each section summary must be thorough — paragraphs, not bullet points
-- Use $$...$$ for all block equations and $...$ for inline math
-- concepts[] must include every important term, abbreviation, and concept
-- takeaways[] should have 5-10 items — the non-negotiable things a student must remember
-- If a table exists in the document, reproduce it properly in markdown in tables[]
-- formulas[] should capture every significant equation in the document
-
-ANSWER:"""
-
-    content = [{"type": "text", "text": prompt}]
-    for b64 in key_images[:4]:
-        mime = "image/png" if b64.startswith("iVBOR") else "image/jpeg"
-        content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
-
-    response, _ = invoke_with_fallback([HumanMessage(content=content)])
-    raw = response.content.strip()
-
-    # strip accidental markdown fences
-    raw = re.sub(r"^```[a-z]*\n?", "", raw, flags=re.MULTILINE)
-    raw = re.sub(r"```$",          "", raw, flags=re.MULTILINE).strip()
-
-    summary = json.loads(raw)
-
-    # store key images and tables in session for rendering
+    # ── Cache images and tables for the UI ────────────────
     st.session_state.summary_images = key_images
     st.session_state.summary_tables = all_tables
+
+    # ── Ensure required keys always exist ─────────────────
+    for key, default in {
+        "topic": doc_name, "plain_english": "",
+        "sections": [], "concepts": [], "tables": [],
+        "formulas": [], "takeaways": []
+    }.items():
+        if key not in summary:
+            summary[key] = default
 
     return summary
 
@@ -1536,11 +1704,8 @@ with tab_summary:
                 try:
                     st.session_state.summary = generate_summary(st.session_state.doc_name)
                     st.rerun()
-                except json.JSONDecodeError:
-                    st.error("The AI returned malformed JSON. Click Regenerate to try again.")
-                    st.stop()
                 except Exception as e:
-                    st.error(f"Summary failed: {e}")
+                    st.error(f"Summary failed: {e}. Click Regenerate to try again.")
                     st.stop()
 
         s = st.session_state.summary
