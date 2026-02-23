@@ -507,17 +507,35 @@ for k, v in {
         st.session_state[k] = v
 
 # ── Global busy flag (shared across all sessions via a temp file) ──────────
-# This is the simplest cross-session signal available without a database.
-_BUSY_FLAG_PATH = os.path.join(tempfile.gettempdir(), "rag_pipeline_busy.flag")
+# Stores JSON: {"user_id": "...", "started_at": unix_timestamp}
+# Auto-expires after PIPELINE_TIMEOUT_SECS so a crashed session never
+# blocks everyone permanently.
+_BUSY_FLAG_PATH      = os.path.join(tempfile.gettempdir(), "rag_pipeline_busy.flag")
+PIPELINE_TIMEOUT_SECS = 600   # 10 minutes — more than enough for any doc
+
+def _flag_data() -> dict:
+    """Read the flag file. Returns {} if missing or corrupt."""
+    try:
+        with open(_BUSY_FLAG_PATH) as f:
+            return json.loads(f.read())
+    except Exception:
+        return {}
 
 def _global_busy() -> bool:
-    """True if ANY user's pipeline is currently running."""
-    return os.path.exists(_BUSY_FLAG_PATH)
+    """True if a pipeline is running AND hasn't timed out."""
+    d = _flag_data()
+    if not d:
+        return False
+    elapsed = time.time() - d.get("started_at", 0)
+    if elapsed > PIPELINE_TIMEOUT_SECS:
+        _set_global_busy(False)   # auto-expire
+        return False
+    return True
 
 def _set_global_busy(busy: bool, user_id: str = ""):
     if busy:
         with open(_BUSY_FLAG_PATH, "w") as f:
-            f.write(user_id)
+            json.dump({"user_id": user_id, "started_at": time.time()}, f)
     else:
         try:
             os.remove(_BUSY_FLAG_PATH)
@@ -525,12 +543,13 @@ def _set_global_busy(busy: bool, user_id: str = ""):
             pass
 
 def _busy_user() -> str:
-    """Return the user_id of whoever is currently running the pipeline."""
-    try:
-        with open(_BUSY_FLAG_PATH) as f:
-            return f.read().strip()
-    except Exception:
-        return ""
+    return _flag_data().get("user_id", "")
+
+def _busy_elapsed_secs() -> int:
+    d = _flag_data()
+    if not d:
+        return 0
+    return int(time.time() - d.get("started_at", time.time()))
 
 # ─── Helpers ─────────────────────────────────────────────
 def log(msg, level="info"):
@@ -648,28 +667,23 @@ def attach_page_images_to_chunks(chunks: list, page_images: dict) -> list:
     """
     For each chunk, find which pages its elements came from and attach
     the corresponding page renders into the chunk's image list.
-    Falls back to surrounding pages if exact match is missing.
+    Stores result in chunk._page_nums (a set of ints).
     """
-    enriched = []
-    for chunk in enriched if enriched else chunks:   # iterate original list
-        pass
-    enriched = []
     for chunk in chunks:
         page_nums = set()
         if hasattr(chunk, "metadata"):
-            # unstructured stores page_number on the chunk metadata
             if hasattr(chunk.metadata, "page_number") and chunk.metadata.page_number:
-                page_nums.add(chunk.metadata.page_number)
-            # also check orig_elements for per-element page numbers
+                page_nums.add(int(chunk.metadata.page_number))
             if hasattr(chunk.metadata, "orig_elements"):
                 for el in chunk.metadata.orig_elements:
                     if hasattr(el, "metadata") and hasattr(el.metadata, "page_number"):
                         if el.metadata.page_number:
-                            page_nums.add(el.metadata.page_number)
-        imgs = [page_images[p] for p in sorted(page_nums) if p in page_images]
-        chunk._page_images = imgs   # attach directly on chunk object
-        enriched.append(chunk)
-    return enriched
+                            page_nums.add(int(el.metadata.page_number))
+        try:
+            chunk._page_nums = page_nums
+        except Exception:
+            pass   # some unstructured objects are frozen — we'll fall back below
+    return chunks
 
 
 # ── General knowledge detection ───────────────────────────────────────────────
@@ -957,21 +971,36 @@ with tab_ingest:
 
     # ── busy notice for OTHER users ──────────────────────
     if _global_busy() and _busy_user() != st.session_state.user_id:
-        st.markdown("""
+        elapsed  = _busy_elapsed_secs()
+        remain   = max(0, PIPELINE_TIMEOUT_SECS - elapsed)
+        mins_el  = elapsed // 60
+        secs_el  = elapsed % 60
+        mins_rem = remain // 60
+
+        st.markdown(f"""
         <div class="busy-card">
             <div class="busy-spinner"></div>
             <div class="busy-title">Pipeline in use</div>
             <div class="busy-sub">
                 Another user is currently indexing a document.<br>
-                <strong>This usually takes 1–3 minutes.</strong><br><br>
+                <strong>Running for {mins_el}m {secs_el:02d}s</strong>
+                · auto-unlocks in ~{mins_rem} min if stuck.<br><br>
                 You can still use the <strong>Chat</strong> and <strong>Quiz</strong> tabs
                 if you've already indexed a document, or wait here and the button
                 will unlock automatically when they're done.
             </div>
         </div>
         """, unsafe_allow_html=True)
-        # auto-refresh every 5s so the button unlocks without a manual reload
-        time.sleep(5)
+
+        col_refresh, col_force = st.columns([3, 1])
+        with col_force:
+            if st.button("🔓 Force unlock", help="Use this if the pipeline has been stuck for more than 10 minutes"):
+                _set_global_busy(False)
+                st.success("Unlocked. You can now run the pipeline.")
+                st.rerun()
+
+        # auto-refresh every 8s so button unlocks without manual reload
+        time.sleep(8)
         st.rerun()
 
     # supported formats strip
@@ -1113,20 +1142,50 @@ with tab_ingest:
 
                 def separate(chunk, chunk_idx=0):
                     d = {"text": chunk.text, "tables": [], "images": []}
-                    # page-rendered images attached by attach_page_images_to_chunks
-                    if hasattr(chunk, "_page_images"):
-                        d["images"].extend(chunk._page_images)
-                    # loose images (DOCX/PPTX) — distribute evenly across chunks
+
+                    # ── resolve page numbers from chunk metadata ──────────
+                    page_nums = set()
+                    if hasattr(chunk, "_page_nums"):
+                        page_nums = chunk._page_nums
+                    elif hasattr(chunk, "metadata"):
+                        if hasattr(chunk.metadata, "page_number") and chunk.metadata.page_number:
+                            page_nums.add(int(chunk.metadata.page_number))
+                        if hasattr(chunk.metadata, "orig_elements"):
+                            for el in chunk.metadata.orig_elements:
+                                if hasattr(el, "metadata") and hasattr(el.metadata, "page_number"):
+                                    if el.metadata.page_number:
+                                        page_nums.add(int(el.metadata.page_number))
+
+                    # ── PDF: pull rendered page images by page number ──────
+                    if page_images:
+                        if page_nums:
+                            for p in sorted(page_nums):
+                                if p in page_images:
+                                    d["images"].append(page_images[p])
+                        else:
+                            # no page number metadata — distribute proportionally
+                            total_pages = len(page_images)
+                            total_chunks = max(len(chunks), 1)
+                            pages_per_chunk = max(1, total_pages // total_chunks)
+                            start_page = chunk_idx * pages_per_chunk + 1
+                            end_page   = start_page + pages_per_chunk
+                            sorted_pages = sorted(page_images.keys())
+                            for p in sorted_pages[start_page - 1 : end_page - 1]:
+                                d["images"].append(page_images[p])
+
+                    # ── DOCX/PPTX: distribute loose images evenly ─────────
                     if loose_images:
-                        per_chunk = max(1, len(loose_images) // max(len(chunks), 1))
-                        start = chunk_idx * per_chunk
+                        total_chunks = max(len(chunks), 1)
+                        per_chunk    = max(1, len(loose_images) // total_chunks)
+                        start        = chunk_idx * per_chunk
                         d["images"].extend(loose_images[start: start + per_chunk])
-                    # table elements from unstructured
+
+                    # ── tables from unstructured elements ─────────────────
                     if hasattr(chunk, "metadata") and hasattr(chunk.metadata, "orig_elements"):
                         for el in chunk.metadata.orig_elements:
-                            t = type(el).__name__
-                            if t == "Table":
+                            if type(el).__name__ == "Table":
                                 d["tables"].append(getattr(el.metadata, "text_as_html", el.text))
+
                     return d
 
                 def ai_summary(text, tables, images):
@@ -1135,10 +1194,16 @@ with tab_ingest:
                         p = f"Create a detailed, searchable description for retrieval.\n\nTEXT:\n{text}\n\n"
                         for i, t in enumerate(tables):
                             p += f"TABLE {i+1}:\n{t}\n\n"
-                        p += "Cover key facts, numbers, topics, questions this answers, and search terms.\n\nDESCRIPTION:"
+                        p += "Cover key facts, numbers, topics, questions this answers, search terms, and describe any visible diagrams, figures, or formulas.\n\nDESCRIPTION:"
                         content = [{"type": "text", "text": p}]
-                        for img in images:
-                            content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}})
+                        # cap at 2 images per summary — page renders are large
+                        for img in images[:2]:
+                            # page renders are PNG; embedded images may be JPEG
+                            mime = "image/png" if img.startswith("iVBOR") else "image/jpeg"
+                            content.append({
+                                "type": "image_url",
+                                "image_url": {"url": f"data:{mime};base64,{img}"}
+                            })
                         response, _ = invoke_with_fallback([HumanMessage(content=content)])
                         return response.content
                     except Exception as e:
@@ -1281,7 +1346,8 @@ Formatting rules — follow these strictly:
 
                             content = [{"type": "text", "text": doc_prompt}]
                             for b64 in chunk_images[:4]:
-                                content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+                                mime = "image/png" if b64.startswith("iVBOR") else "image/jpeg"
+                                content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
 
                             doc_response, provider = invoke_with_fallback([HumanMessage(content=content)], status_slot=notice_slot)
                             doc_answer = doc_response.content
