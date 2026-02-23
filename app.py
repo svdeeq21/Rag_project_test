@@ -443,6 +443,95 @@ label { color:var(--ash) !important; font-size:.75rem !important; }
 .answer-box-gk th   { background:var(--surf2); color:#fbbf24; padding:.5rem .75rem; text-align:left; border:1px solid var(--border); }
 .answer-box-gk td   { padding:.45rem .75rem; border:1px solid var(--border); color:var(--ash); }
 
+/* ── summary ── */
+.sum-hero {
+    background: linear-gradient(135deg, #1a1a1a 0%, #222 100%);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--orange);
+    border-radius: 14px;
+    padding: 1.8rem 2rem;
+    margin-bottom: 1.5rem;
+}
+.sum-doc-title {
+    font-family:'Syne',sans-serif;
+    font-weight:800; font-size:1.5rem;
+    color:var(--white); letter-spacing:-.02em;
+    margin-bottom:.3rem;
+}
+.sum-doc-type {
+    font-size:.72rem; color:var(--orange);
+    text-transform:uppercase; letter-spacing:.1em;
+    font-weight:600; margin-bottom:.8rem;
+}
+.sum-plain-english {
+    font-size:.95rem; color:#d4d4d4;
+    line-height:1.8; border-top:1px solid var(--border);
+    padding-top:.9rem; margin-top:.6rem;
+}
+.sum-section {
+    background:var(--surface);
+    border:1px solid var(--border);
+    border-radius:12px;
+    padding:1.4rem 1.6rem;
+    margin-bottom:1.1rem;
+}
+.sum-section-title {
+    font-family:'Syne',sans-serif;
+    font-weight:700; font-size:1rem;
+    color:var(--orange); margin-bottom:.9rem;
+    display:flex; align-items:center; gap:8px;
+}
+.sum-section p  { font-size:.88rem; line-height:1.8; color:#d4d4d4; margin:.3rem 0; }
+.sum-section li { font-size:.88rem; line-height:1.75; color:#d4d4d4; }
+.sum-section h3 { font-family:'Syne',sans-serif; color:var(--white);
+                  font-size:.95rem; margin:.8rem 0 .3rem 0; }
+.sum-section code {
+    background:var(--surf2); border:1px solid var(--border);
+    border-radius:4px; padding:1px 6px;
+    font-size:.82rem; color:var(--orange2);
+}
+.sum-section table { width:100%; border-collapse:collapse; font-size:.83rem; margin:.5rem 0; }
+.sum-section th { background:var(--surf2); color:var(--orange2);
+                  padding:.5rem .75rem; text-align:left; border:1px solid var(--border); }
+.sum-section td { padding:.45rem .75rem; border:1px solid var(--border); color:var(--ash); }
+.sum-section tr:nth-child(even) td { background:rgba(255,255,255,.02); }
+.sum-concept-card {
+    background:var(--surf2);
+    border:1px solid var(--border);
+    border-left:3px solid var(--orange);
+    border-radius:8px;
+    padding:.8rem 1rem;
+    margin-bottom:.6rem;
+}
+.sum-concept-term {
+    font-weight:700; font-size:.88rem;
+    color:var(--orange2); margin-bottom:.25rem;
+}
+.sum-concept-def { font-size:.83rem; color:var(--ash); line-height:1.6; }
+.sum-takeaway {
+    background: rgba(249,115,22,.07);
+    border:1px solid rgba(249,115,22,.2);
+    border-radius:8px; padding:.7rem 1rem;
+    margin-bottom:.5rem; font-size:.87rem;
+    color:var(--white); line-height:1.6;
+    display:flex; gap:10px; align-items:flex-start;
+}
+.sum-takeaway-num {
+    background:var(--orange); color:#000;
+    font-weight:800; font-size:.7rem;
+    border-radius:50%; width:20px; height:20px;
+    display:flex; align-items:center; justify-content:center;
+    flex-shrink:0; margin-top:1px;
+}
+.sum-fig-caption {
+    font-size:.72rem; color:var(--ash);
+    text-align:center; margin-top:.4rem;
+    font-style:italic;
+}
+.sum-regen-bar {
+    display:flex; justify-content:flex-end;
+    margin-bottom:1rem;
+}
 /* ── queue / busy card ── */
 .busy-card {
     background:var(--surface);
@@ -496,7 +585,12 @@ for k, v in {
     "logs": [],
     "metrics": {"elements": 0, "chunks": 0, "docs": 0},
     "chat_history": [],
-    "pipeline_busy": False,   # True while THIS user's pipeline is running
+    "pipeline_busy": False,
+    # ── summary ──
+    "summary": None,           # generated summary dict, cached after first run
+    "summary_images": [],      # key figure images selected for summary
+    "summary_tables": [],      # all unique tables found
+    "doc_name": "",            # filename of the indexed document
     # ── quiz ──
     "quiz_questions": [],
     "quiz_answers": {},
@@ -884,6 +978,136 @@ Rules:
     return questions
 
 
+def generate_summary(doc_name: str) -> dict:
+    """
+    Generate a full structured summary of the indexed document.
+    Uses all processed chunks so nothing is missed.
+    Returns a dict with keys matching the summary sections.
+    """
+    from langchain_core.messages import HumanMessage
+
+    docs        = st.session_state.processed_chunks
+    page_images = st.session_state.get("all_page_images", {})
+
+    # ── Collect all raw text, tables, and images from every chunk ──────────
+    all_texts  = []
+    all_tables = []
+    seen_text_hashes  = set()
+    seen_table_hashes = set()
+
+    for doc in docs:
+        orig = json.loads(doc.metadata.get("original_content", "{}"))
+        txt  = orig.get("raw_text", "").strip()
+        if txt:
+            h = _hash(txt)
+            if h not in seen_text_hashes:
+                seen_text_hashes.add(h)
+                all_texts.append(txt)
+        for tbl in orig.get("tables_html", []):
+            if tbl:
+                h = _hash(tbl.strip())
+                if h not in seen_table_hashes:
+                    seen_table_hashes.add(h)
+                    all_tables.append(tbl)
+
+    # ── Select visually important pages (up to 6) ──────────────────────────
+    # Strategy: sample evenly across the document but prefer pages with images
+    key_images = []
+    if page_images:
+        sorted_pages = sorted(page_images.keys())
+        total        = len(sorted_pages)
+        # always include first and last page, sample up to 4 more evenly
+        candidates = [sorted_pages[0]]
+        if total > 1:
+            step = max(1, total // 5)
+            candidates += sorted_pages[1:-1:step]
+            candidates.append(sorted_pages[-1])
+        candidates = list(dict.fromkeys(candidates))[:6]   # dedup, cap at 6
+        key_images = [page_images[p] for p in candidates]
+
+    # ── Build the full document text for the LLM (all chunks concatenated) ──
+    full_text = "\n\n---\n\n".join(all_texts)
+
+    # ── Table context (first 4 tables as HTML) ─────────────────────────────
+    table_context = ""
+    for i, t in enumerate(all_tables[:4]):
+        table_context += f"\nTABLE {i+1}:\n{t}\n"
+
+    # ── Prompt ────────────────────────────────────────────────────────────
+    prompt = f"""You are an expert academic summariser. Your job is to produce a thorough, intelligent summary of the document below. 
+
+The user is a student or learner. They want to understand the document completely — not just get a short blurb. The summary should be as long as needed to cover everything important. Skip unnecessary filler and padding, but never skip a real concept, finding, formula, or key idea.
+
+DOCUMENT NAME: {doc_name}
+
+FULL DOCUMENT TEXT:
+{full_text}
+
+{f"TABLES IN DOCUMENT:{table_context}" if table_context else ""}
+
+{"FIGURES: " + str(len(key_images)) + " key page image(s) are attached. Identify any significant diagrams, figures, charts, or formulas visible in them." if key_images else ""}
+
+YOUR TASK: Produce a structured JSON summary with EXACTLY these keys:
+
+{{
+  "topic": "What this document is about in ONE plain sentence, no jargon",
+  "plain_english": "Explain the whole topic from scratch as if the reader has never heard of it. Build up from the basics. 2-4 paragraphs.",
+  "sections": [
+    {{
+      "title": "Section or topic name",
+      "summary": "Thorough explanation of everything in this section. Be detailed. Use markdown formatting, LaTeX for formulas ($...$  inline, $$...$$ for block equations). Skip waffle, keep every real idea.",
+      "formulas": ["$$formula1$$", "$$formula2$$"],
+      "key_point": "The single most important thing to understand about this section"
+    }}
+  ],
+  "concepts": [
+    {{"term": "Term name", "definition": "Clear, simple definition. One or two sentences."}}
+  ],
+  "tables": [
+    {{"title": "What this table shows", "markdown": "| Col1 | Col2 |\\n|---|---|\\n| val | val |"}}
+  ],
+  "formulas": [
+    {{"label": "Formula name or what it represents", "latex": "$$...$$", "explanation": "What this formula means in plain terms"}}
+  ],
+  "takeaways": [
+    "The most important thing 1",
+    "The most important thing 2"
+  ]
+}}
+
+STRICT RULES:
+- Return ONLY valid JSON. No markdown fences. No extra text before or after.
+- sections[] must cover EVERY major topic in the document — do not skip anything
+- Each section summary must be thorough — paragraphs, not bullet points
+- Use $$...$$ for all block equations and $...$ for inline math
+- concepts[] must include every important term, abbreviation, and concept
+- takeaways[] should have 5-10 items — the non-negotiable things a student must remember
+- If a table exists in the document, reproduce it properly in markdown in tables[]
+- formulas[] should capture every significant equation in the document
+
+ANSWER:"""
+
+    content = [{"type": "text", "text": prompt}]
+    for b64 in key_images[:4]:
+        mime = "image/png" if b64.startswith("iVBOR") else "image/jpeg"
+        content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}})
+
+    response, _ = invoke_with_fallback([HumanMessage(content=content)])
+    raw = response.content.strip()
+
+    # strip accidental markdown fences
+    raw = re.sub(r"^```[a-z]*\n?", "", raw, flags=re.MULTILINE)
+    raw = re.sub(r"```$",          "", raw, flags=re.MULTILINE).strip()
+
+    summary = json.loads(raw)
+
+    # store key images and tables in session for rendering
+    st.session_state.summary_images = key_images
+    st.session_state.summary_tables = all_tables
+
+    return summary
+
+
 # ─── Branding Header ─────────────────────────────────────
 initial = BRAND_NAME[0].upper() if BRAND_NAME else "?"
 if BRAND_LOGO and os.path.exists(BRAND_LOGO):
@@ -919,8 +1143,8 @@ then lets you chat with the content or test your understanding.
 """, unsafe_allow_html=True)
 
 # ─── Tabs ────────────────────────────────────────────────
-tab_ingest, tab_query, tab_quiz, tab_logs = st.tabs(
-    ["  📄  Upload & Index  ", "  💬  Chat  ", "  🧠  Quiz  ", "  🗒  Logs  "]
+tab_ingest, tab_summary, tab_query, tab_quiz, tab_logs = st.tabs(
+    ["  📄  Upload & Index  ", "  📋  Summary  ", "  💬  Chat  ", "  🧠  Quiz  ", "  🗒  Logs  "]
 )
 
 # ════════════════════════════════════════════════════════
@@ -1247,8 +1471,21 @@ with tab_ingest:
                 st.session_state.processed_chunks = docs
                 st.session_state.metrics["docs"]  = len(docs)
                 st.session_state.pipeline_ran      = True
+                st.session_state.doc_name          = uploaded_file.name
+                st.session_state.all_page_images   = page_images   # full page renders
+                st.session_state.summary           = None           # reset so it regenerates
                 log(f"Vector store ready → {USER_PERSIST_DIR}", "success")
                 st.write(f"✅ {len(docs)} docs indexed")
+
+                # 5 ─ generate summary
+                st.write("📝 Generating document summary…")
+                try:
+                    st.session_state.summary = generate_summary(uploaded_file.name)
+                    log("Summary generated", "success")
+                    st.write("✅ Summary ready")
+                except Exception as e:
+                    log(f"Summary generation failed: {e}", "error")
+                    st.write(f"⚠️ Summary failed (you can regenerate from the Summary tab): {e}")
 
                 os.unlink(tmp_path)
                 _set_global_busy(False)              # 🔓 unlock on success
@@ -1263,7 +1500,169 @@ with tab_ingest:
         st.rerun()
 
 # ════════════════════════════════════════════════════════
-# TAB 2 — CHAT
+# TAB 2 — SUMMARY
+# ════════════════════════════════════════════════════════
+with tab_summary:
+    if not st.session_state.pipeline_ran:
+        st.markdown("""
+        <div style="text-align:center; padding:3rem 1rem;
+                    border:1px dashed #2a2a2a; border-radius:14px; margin-top:1rem;">
+            <div style="font-size:2.4rem; margin-bottom:.75rem">📋</div>
+            <div style="font-family:'Syne',sans-serif; font-weight:700; font-size:1.05rem;
+                        color:#f5f5f5; margin-bottom:.4rem;">No document indexed yet</div>
+            <div style="color:#525252; font-size:.82rem">
+                Upload and index a document first — the summary generates automatically.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    else:
+        # ── regenerate button ────────────────────────────
+        col_title, col_btn = st.columns([4, 1])
+        with col_title:
+            st.markdown(
+                f'<div style="font-family:Syne,sans-serif;font-weight:800;'
+                f'font-size:1.1rem;color:#f5f5f5;padding-top:.3rem;">'
+                f'📋 {st.session_state.doc_name}</div>',
+                unsafe_allow_html=True
+            )
+        with col_btn:
+            if st.button("🔄 Regenerate", help="Re-generate the summary from scratch"):
+                st.session_state.summary = None
+
+        # ── generate if missing ──────────────────────────
+        if st.session_state.summary is None:
+            with st.spinner("Reading your document and generating summary… this may take a minute for long documents."):
+                try:
+                    st.session_state.summary = generate_summary(st.session_state.doc_name)
+                    st.rerun()
+                except json.JSONDecodeError:
+                    st.error("The AI returned malformed JSON. Click Regenerate to try again.")
+                    st.stop()
+                except Exception as e:
+                    st.error(f"Summary failed: {e}")
+                    st.stop()
+
+        s = st.session_state.summary
+
+        # ════ HERO — what is this document? ══════════════
+        st.markdown(f"""
+        <div class="sum-hero">
+            <div class="sum-doc-type">📄 Document Summary</div>
+            <div class="sum-doc-title">{s.get("topic", st.session_state.doc_name)}</div>
+            <div class="sum-plain-english">{s.get("plain_english", "").replace(chr(10), "<br>")}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # ════ KEY FIGURES ═════════════════════════════════
+        key_imgs = st.session_state.summary_images
+        if key_imgs:
+            st.markdown('<div class="sum-section"><div class="sum-section-title">🖼️ Key Figures from Document</div>', unsafe_allow_html=True)
+            cols = st.columns(min(len(key_imgs), 3))
+            for i, b64 in enumerate(key_imgs):
+                try:
+                    cols[i % 3].image(base64.b64decode(b64), use_container_width=True)
+                    cols[i % 3].markdown(f'<div class="sum-fig-caption">Figure {i+1}</div>', unsafe_allow_html=True)
+                except Exception:
+                    pass
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ════ SECTION-BY-SECTION BREAKDOWN ═══════════════
+        sections = s.get("sections", [])
+        if sections:
+            st.markdown('<div class="sum-section"><div class="sum-section-title">📖 Full Document Breakdown</div>', unsafe_allow_html=True)
+            for sec in sections:
+                st.markdown(f"### {sec.get('title', 'Section')}")
+                st.markdown(sec.get("summary", ""))
+
+                # inline formulas for this section
+                sec_formulas = sec.get("formulas", [])
+                if sec_formulas:
+                    for f in sec_formulas:
+                        st.markdown(f)
+
+                # key point callout
+                kp = sec.get("key_point", "")
+                if kp:
+                    st.markdown(f"""
+                    <div style="background:rgba(249,115,22,.07);border-left:3px solid var(--orange);
+                                border-radius:0 8px 8px 0;padding:.6rem 1rem;margin:.6rem 0;
+                                font-size:.83rem;color:#fb923c;">
+                        💡 <strong>Key point:</strong> {kp}
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                st.markdown("<hr style='border-color:#2a2a2a;margin:1rem 0'>", unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ════ KEY CONCEPTS GLOSSARY ═══════════════════════
+        concepts = s.get("concepts", [])
+        if concepts:
+            st.markdown('<div class="sum-section"><div class="sum-section-title">🔑 Key Concepts & Terms</div>', unsafe_allow_html=True)
+            for c in concepts:
+                st.markdown(f"""
+                <div class="sum-concept-card">
+                    <div class="sum-concept-term">{c.get("term", "")}</div>
+                    <div class="sum-concept-def">{c.get("definition", "")}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ════ FORMULAS ════════════════════════════════════
+        formulas = s.get("formulas", [])
+        if formulas:
+            st.markdown('<div class="sum-section"><div class="sum-section-title">🧮 Formulas & Equations</div>', unsafe_allow_html=True)
+            for f in formulas:
+                label = f.get("label", "")
+                latex = f.get("latex", "")
+                expl  = f.get("explanation", "")
+                if label:
+                    st.markdown(f"**{label}**")
+                if latex:
+                    st.markdown(latex)
+                if expl:
+                    st.markdown(f'<div style="font-size:.82rem;color:#a3a3a3;margin-bottom:.8rem;">{expl}</div>', unsafe_allow_html=True)
+                st.markdown("<div style='height:.3rem'></div>", unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ════ TABLES ══════════════════════════════════════
+        tables = s.get("tables", [])
+        if tables:
+            st.markdown('<div class="sum-section"><div class="sum-section-title">📊 Tables</div>', unsafe_allow_html=True)
+            for t in tables:
+                title = t.get("title", "")
+                md    = t.get("markdown", "")
+                if title:
+                    st.markdown(f"**{title}**")
+                if md:
+                    st.markdown(md)
+                st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ════ TAKEAWAYS ═══════════════════════════════════
+        takeaways = s.get("takeaways", [])
+        if takeaways:
+            st.markdown('<div class="sum-section"><div class="sum-section-title">💡 What You Must Remember</div>', unsafe_allow_html=True)
+            for i, t in enumerate(takeaways):
+                st.markdown(f"""
+                <div class="sum-takeaway">
+                    <div class="sum-takeaway-num">{i+1}</div>
+                    <div>{t}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+
+        # ── bottom CTA ───────────────────────────────────
+        st.markdown("""
+        <div style="text-align:center;padding:1.5rem 0 .5rem 0;color:#525252;font-size:.8rem;">
+            Still have questions? Switch to the <strong style="color:#a3a3a3">Chat</strong> tab
+            to ask anything, or test yourself in the <strong style="color:#a3a3a3">Quiz</strong> tab.
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# ════════════════════════════════════════════════════════
+# TAB 3 — CHAT
 # ════════════════════════════════════════════════════════
 with tab_query:
     if not st.session_state.pipeline_ran:
@@ -1420,7 +1819,7 @@ GENERAL EXPLANATION:"""
                 st.rerun()
 
 # ════════════════════════════════════════════════════════
-# TAB 3 — QUIZ
+# TAB 4 — QUIZ
 # ════════════════════════════════════════════════════════
 with tab_quiz:
     if not st.session_state.pipeline_ran:
@@ -1615,7 +2014,7 @@ with tab_quiz:
                     st.rerun()
 
 # ════════════════════════════════════════════════════════
-# TAB 4 — LOGS
+# TAB 5 — LOGS
 # ════════════════════════════════════════════════════════
 with tab_logs:
     st.markdown("### Pipeline logs")
