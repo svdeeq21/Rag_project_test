@@ -27,3 +27,4 @@ sentence-transformers
 # ── App ──────────────────────────────────────────────────
 streamlit
 python-dotenv
+supabase
