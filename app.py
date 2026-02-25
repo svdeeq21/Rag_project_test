@@ -1486,178 +1486,185 @@ def generate_summary(doc_name: str) -> dict:
 
 # ─── Auth UI ─────────────────────────────────────────────
 
-def _auth_logo():
+def _auth_header(title: str, subtitle: str):
+    """Renders the logo, brand name, title and subtitle for auth screens."""
     initial = BRAND_NAME[0].upper() if BRAND_NAME else "?"
     st.markdown(f"""
-    <div class="auth-logo">
-        <div class="auth-logo-circle">{initial}</div>
-        <div style="font-family:'Syne',sans-serif;font-weight:800;
-                    font-size:1rem;color:#f5f5f5;">{BRAND_NAME}</div>
+    <div style="text-align:center; padding: 2rem 0 1.5rem 0;">
+        <div style="
+            width:52px; height:52px; background:#f97316; border-radius:50%;
+            display:inline-flex; align-items:center; justify-content:center;
+            font-family:'Syne',sans-serif; font-weight:800; font-size:1.3rem;
+            color:#000; margin-bottom:.6rem;">
+            {initial}
+        </div>
+        <div style="font-family:'Syne',sans-serif; font-weight:800;
+                    font-size:1rem; color:#f5f5f5; margin-bottom:1.2rem;">
+            {BRAND_NAME}
+        </div>
+        <div style="font-family:'Syne',sans-serif; font-weight:800;
+                    font-size:1.35rem; color:#ffffff; margin-bottom:.3rem;">
+            {title}
+        </div>
+        <div style="font-size:.82rem; color:#a3a3a3; margin-bottom:.5rem;">
+            {subtitle}
+        </div>
     </div>
     """, unsafe_allow_html=True)
 
-def _show_auth_error(msg):
-    if msg:
-        st.markdown(f'<div class="auth-err">⚠️ {msg}</div>', unsafe_allow_html=True)
-
-def _show_auth_ok(msg):
-    if msg:
-        st.markdown(f'<div class="auth-ok">✅ {msg}</div>', unsafe_allow_html=True)
-
 def render_signin():
-    st.markdown('<div class="auth-wrap"><div class="auth-card">', unsafe_allow_html=True)
-    _auth_logo()
-    st.markdown('<div class="auth-title">Welcome back</div>', unsafe_allow_html=True)
-    st.markdown('<div class="auth-sub">Sign in to your account</div>', unsafe_allow_html=True)
+    # center the form with columns
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
+        _auth_header("Welcome back", "Sign in to your account")
 
-    _show_auth_error(st.session_state.auth_error)
-    _show_auth_ok(st.session_state.auth_ok)
+        if st.session_state.auth_error:
+            st.error(st.session_state.auth_error)
+        if st.session_state.auth_ok:
+            st.success(st.session_state.auth_ok)
 
-    email    = st.text_input("Email address", key="si_email",
-                             placeholder="you@example.com")
-    password = st.text_input("Password", type="password", key="si_pass",
-                             placeholder="Your password")
+        email    = st.text_input("Email address", key="si_email",
+                                 placeholder="you@example.com")
+        password = st.text_input("Password", type="password", key="si_pass",
+                                 placeholder="Your password")
 
-    if st.button("Sign in →", use_container_width=True, type="primary"):
-        st.session_state.auth_error = ""
-        st.session_state.auth_ok    = ""
-        if not email or not password:
-            st.session_state.auth_error = "Please fill in all fields."
-            st.rerun()
-        else:
-            try:
-                res  = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                user = res.user
-                st.session_state.user    = user
-                st.session_state.profile = db_get_profile(user.id)
-                db_touch_last_seen(user.id)
-                st.session_state.auth_error = ""
-                st.session_state.auth_ok    = ""
+        if st.button("Sign in →", use_container_width=True, type="primary", key="si_btn"):
+            st.session_state.auth_error = ""
+            st.session_state.auth_ok    = ""
+            if not email or not password:
+                st.session_state.auth_error = "Please fill in all fields."
                 st.rerun()
-            except Exception as e:
-                err = str(e)
-                if "Invalid login" in err or "invalid" in err.lower():
-                    st.session_state.auth_error = "Incorrect email or password."
-                elif "confirmed" in err.lower() or "verify" in err.lower():
-                    st.session_state.auth_error = "Please verify your email first — check your inbox."
-                else:
-                    st.session_state.auth_error = f"Sign in failed: {err}"
+            else:
+                try:
+                    res  = supabase.auth.sign_in_with_password(
+                        {"email": email, "password": password}
+                    )
+                    st.session_state.user    = res.user
+                    st.session_state.profile = db_get_profile(res.user.id)
+                    db_touch_last_seen(res.user.id)
+                    st.session_state.auth_error = ""
+                    st.session_state.auth_ok    = ""
+                    st.rerun()
+                except Exception as e:
+                    err = str(e)
+                    if "Invalid login" in err or "invalid" in err.lower():
+                        st.session_state.auth_error = "Incorrect email or password."
+                    elif "confirmed" in err.lower() or "verify" in err.lower():
+                        st.session_state.auth_error = "Please verify your email — check your inbox."
+                    else:
+                        st.session_state.auth_error = f"Sign in failed: {err}"
+                    st.rerun()
+
+        st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("Create account", use_container_width=True, key="si_to_su"):
+                st.session_state.auth_screen = "signup"
+                st.session_state.auth_error  = ""
+                st.session_state.auth_ok     = ""
                 st.rerun()
-
-    st.markdown('<div class="auth-divider"><hr/><span>or</span><hr/></div>', unsafe_allow_html=True)
-
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Create account", use_container_width=True):
-            st.session_state.auth_screen = "signup"
-            st.session_state.auth_error  = ""
-            st.session_state.auth_ok     = ""
-            st.rerun()
-    with col2:
-        if st.button("Forgot password", use_container_width=True):
-            st.session_state.auth_screen = "reset"
-            st.session_state.auth_error  = ""
-            st.session_state.auth_ok     = ""
-            st.rerun()
-
-    st.markdown('</div></div>', unsafe_allow_html=True)
+        with c2:
+            if st.button("Forgot password", use_container_width=True, key="si_to_rp"):
+                st.session_state.auth_screen = "reset"
+                st.session_state.auth_error  = ""
+                st.session_state.auth_ok     = ""
+                st.rerun()
 
 
 def render_signup():
-    st.markdown('<div class="auth-wrap"><div class="auth-card">', unsafe_allow_html=True)
-    _auth_logo()
-    st.markdown('<div class="auth-title">Create your account</div>', unsafe_allow_html=True)
-    st.markdown('<div class="auth-sub">Free forever. No credit card needed.</div>',
-                unsafe_allow_html=True)
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
+        _auth_header("Create your account", "Free forever · No credit card needed")
 
-    _show_auth_error(st.session_state.auth_error)
-    _show_auth_ok(st.session_state.auth_ok)
+        if st.session_state.auth_error:
+            st.error(st.session_state.auth_error)
+        if st.session_state.auth_ok:
+            st.success(st.session_state.auth_ok)
 
-    full_name = st.text_input("Full name",       key="su_name", placeholder="Your name")
-    email     = st.text_input("Email address",   key="su_email", placeholder="you@example.com")
-    password  = st.text_input("Password",        key="su_pass",
-                              type="password", placeholder="At least 6 characters")
-    confirm   = st.text_input("Confirm password", key="su_conf",
-                              type="password", placeholder="Repeat your password")
+        full_name = st.text_input("Full name",        key="su_name",
+                                  placeholder="Your name")
+        email     = st.text_input("Email address",    key="su_email",
+                                  placeholder="you@example.com")
+        password  = st.text_input("Password",         key="su_pass",
+                                  type="password", placeholder="At least 6 characters")
+        confirm   = st.text_input("Confirm password", key="su_conf",
+                                  type="password", placeholder="Repeat your password")
 
-    if st.button("Create account →", use_container_width=True, type="primary"):
-        st.session_state.auth_error = ""
-        st.session_state.auth_ok    = ""
-        if not all([full_name, email, password, confirm]):
-            st.session_state.auth_error = "Please fill in all fields."
-        elif len(password) < 6:
-            st.session_state.auth_error = "Password must be at least 6 characters."
-        elif password != confirm:
-            st.session_state.auth_error = "Passwords do not match."
-        else:
-            try:
-                res = supabase.auth.sign_up({
-                    "email":    email,
-                    "password": password,
-                    "options":  {"data": {"full_name": full_name}}
-                })
-                if res.user:
-                    st.session_state.auth_ok    = (
-                        "Account created! Check your email to verify your address, "
-                        "then sign in."
-                    )
-                    st.session_state.auth_screen = "signin"
-                else:
-                    st.session_state.auth_error = "Sign up failed — please try again."
-            except Exception as e:
-                err = str(e)
-                if "already registered" in err.lower() or "already exists" in err.lower():
-                    st.session_state.auth_error = "An account with that email already exists."
-                else:
-                    st.session_state.auth_error = f"Sign up failed: {err}"
-        st.rerun()
+        if st.button("Create account →", use_container_width=True,
+                     type="primary", key="su_btn"):
+            st.session_state.auth_error = ""
+            st.session_state.auth_ok    = ""
+            if not all([full_name, email, password, confirm]):
+                st.session_state.auth_error = "Please fill in all fields."
+            elif len(password) < 6:
+                st.session_state.auth_error = "Password must be at least 6 characters."
+            elif password != confirm:
+                st.session_state.auth_error = "Passwords do not match."
+            else:
+                try:
+                    res = supabase.auth.sign_up({
+                        "email":    email,
+                        "password": password,
+                        "options":  {"data": {"full_name": full_name}}
+                    })
+                    if res.user:
+                        st.session_state.auth_ok     = (
+                            "Account created! Check your email to verify, then sign in."
+                        )
+                        st.session_state.auth_screen = "signin"
+                    else:
+                        st.session_state.auth_error = "Sign up failed — please try again."
+                except Exception as e:
+                    err = str(e)
+                    if "already" in err.lower():
+                        st.session_state.auth_error = "An account with that email already exists."
+                    else:
+                        st.session_state.auth_error = f"Sign up failed: {err}"
+            st.rerun()
 
-    st.markdown('<div class="auth-divider"><hr/><span>already have an account?</span><hr/></div>',
-                unsafe_allow_html=True)
-    if st.button("Sign in instead", use_container_width=True):
-        st.session_state.auth_screen = "signin"
-        st.session_state.auth_error  = ""
-        st.session_state.auth_ok     = ""
-        st.rerun()
-
-    st.markdown('</div></div>', unsafe_allow_html=True)
+        st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+        if st.button("← Back to sign in", use_container_width=True, key="su_back"):
+            st.session_state.auth_screen = "signin"
+            st.session_state.auth_error  = ""
+            st.session_state.auth_ok     = ""
+            st.rerun()
 
 
 def render_reset():
-    st.markdown('<div class="auth-wrap"><div class="auth-card">', unsafe_allow_html=True)
-    _auth_logo()
-    st.markdown('<div class="auth-title">Reset password</div>', unsafe_allow_html=True)
-    st.markdown('<div class="auth-sub">We\'ll send you a reset link</div>',
-                unsafe_allow_html=True)
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
+        _auth_header("Reset password", "We'll send you a reset link")
 
-    _show_auth_error(st.session_state.auth_error)
-    _show_auth_ok(st.session_state.auth_ok)
+        if st.session_state.auth_error:
+            st.error(st.session_state.auth_error)
+        if st.session_state.auth_ok:
+            st.success(st.session_state.auth_ok)
 
-    email = st.text_input("Email address", key="rp_email",
-                          placeholder="you@example.com")
+        email = st.text_input("Email address", key="rp_email",
+                              placeholder="you@example.com")
 
-    if st.button("Send reset link →", use_container_width=True, type="primary"):
-        st.session_state.auth_error = ""
-        st.session_state.auth_ok    = ""
-        if not email:
-            st.session_state.auth_error = "Please enter your email address."
-        else:
-            try:
-                supabase.auth.reset_password_email(email)
-                st.session_state.auth_ok = (
-                    "Reset link sent! Check your inbox and follow the link."
-                )
-            except Exception as e:
-                st.session_state.auth_error = f"Failed to send reset email: {e}"
-        st.rerun()
+        if st.button("Send reset link →", use_container_width=True,
+                     type="primary", key="rp_btn"):
+            st.session_state.auth_error = ""
+            st.session_state.auth_ok    = ""
+            if not email:
+                st.session_state.auth_error = "Please enter your email address."
+            else:
+                try:
+                    supabase.auth.reset_password_email(email)
+                    st.session_state.auth_ok = (
+                        "Reset link sent! Check your inbox and follow the link."
+                    )
+                except Exception as e:
+                    st.session_state.auth_error = f"Failed to send reset email: {e}"
+            st.rerun()
 
-    if st.button("← Back to sign in", use_container_width=True):
-        st.session_state.auth_screen = "signin"
-        st.session_state.auth_error  = ""
-        st.session_state.auth_ok     = ""
-        st.rerun()
-
-    st.markdown('</div></div>', unsafe_allow_html=True)
+        st.markdown("<div style='height:.5rem'></div>", unsafe_allow_html=True)
+        if st.button("← Back to sign in", use_container_width=True, key="rp_back"):
+            st.session_state.auth_screen = "signin"
+            st.session_state.auth_error  = ""
+            st.session_state.auth_ok     = ""
+            st.rerun()
 
 
 # ─── Auth gate — show auth screens if not signed in ──────
@@ -1697,44 +1704,27 @@ else:
     _display_name = st.session_state.user.email
 
 # Brand bar + user pill — sign out is a separate small button below
-st.markdown(f"""
-<div class="brand-bar">
-  <div class="brand-left">
-    {logo_html}
-    <div>
-      <div class="brand-name">{BRAND_NAME}</div>
-      <div class="brand-sub">{APP_SUBTITLE}</div>
+# Brand bar + sign out
+_bar_col, _out_col = st.columns([5, 1])
+with _bar_col:
+    st.markdown(f"""
+    <div class="brand-bar" style="margin-bottom:0">
+      <div class="brand-left">
+        {logo_html}
+        <div>
+          <div class="brand-name">{BRAND_NAME}</div>
+          <div class="brand-sub">{APP_SUBTITLE}</div>
+        </div>
+      </div>
+      <div class="user-pill">
+        <div class="user-pill-dot"></div>
+        <span>{_display_name}</span>
+      </div>
     </div>
-  </div>
-  <div class="user-pill">
-    <div class="user-pill-dot"></div>
-    <span>{_display_name}</span>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-# Small sign-out button — right-aligned, minimal
-_so_col1, _so_col2 = st.columns([10, 1])
-with _so_col2:
-    # CSS override to shrink this specific button
-    st.markdown("""
-    <style>
-    div[data-testid="column"]:last-child .stButton button {
-        font-size: .7rem !important;
-        padding: .2rem .6rem !important;
-        background: transparent !important;
-        border: 1px solid #2a2a2a !important;
-        color: #525252 !important;
-        border-radius: 6px !important;
-        white-space: nowrap !important;
-    }
-    div[data-testid="column"]:last-child .stButton button:hover {
-        border-color: #ef4444 !important;
-        color: #fca5a5 !important;
-    }
-    </style>
     """, unsafe_allow_html=True)
-    if st.button("Sign out", key="signout_btn"):
+with _out_col:
+    st.markdown("<div style='padding-top:1rem'></div>", unsafe_allow_html=True)
+    if st.button("↪ Sign out", key="signout_btn", use_container_width=True):
         try:
             supabase.auth.sign_out()
         except Exception:
