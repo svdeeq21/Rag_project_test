@@ -666,16 +666,6 @@ label { color:var(--ash) !important; font-size:.75rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
-# ─── MathJax (renders $...$ and $$...$$ LaTeX in answers) ───
-st.markdown("""
-<script>
-window.MathJax = {
-  tex: { inlineMath: [['$','$']], displayMath: [['$$','$$']] },
-  svg: { fontCache: 'global' }
-};
-</script>
-<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" async></script>
-""", unsafe_allow_html=True)
 # ── Auth + session state ──────────────────────────────────
 for k, v in {
     # ── auth ──
@@ -1684,23 +1674,29 @@ if not st.session_state.user:
         render_signin()
     st.stop()   # ← nothing below renders until signed in
 
-# ─── Signed-in: update last_seen once per session ────────
+# ─── Signed-in: load profile once per session ────────────
 if not st.session_state.profile:
     st.session_state.profile = db_get_profile(st.session_state.user.id)
     db_touch_last_seen(st.session_state.user.id)
 
-
-# ─── Branding Header ─────────────────────────────────────
+# ─── Branding Header (only renders when signed in) ────────
 initial = BRAND_NAME[0].upper() if BRAND_NAME else "?"
 if BRAND_LOGO and os.path.exists(BRAND_LOGO):
     with open(BRAND_LOGO, "rb") as f:
         enc = base64.b64encode(f.read()).decode()
-    ext  = BRAND_LOGO.rsplit(".", 1)[-1].lower()
-    mime = "image/png" if ext == "png" else "image/jpeg"
-    logo_html = f'<img class="brand-logo" src="data:{mime};base64,{enc}" />'
+    _ext  = BRAND_LOGO.rsplit(".", 1)[-1].lower()
+    _mime = "image/png" if _ext == "png" else "image/jpeg"
+    logo_html = f'<img class="brand-logo" src="data:{_mime};base64,{enc}" />'
 else:
     logo_html = f'<div class="brand-initials">{initial}</div>'
 
+_display_name = ""
+if st.session_state.profile:
+    _display_name = st.session_state.profile.get("full_name", "") or st.session_state.user.email
+else:
+    _display_name = st.session_state.user.email
+
+# Brand bar + user pill — sign out is a separate small button below
 st.markdown(f"""
 <div class="brand-bar">
   <div class="brand-left">
@@ -1710,38 +1706,64 @@ st.markdown(f"""
       <div class="brand-sub">{APP_SUBTITLE}</div>
     </div>
   </div>
-  <div style="display:flex;align-items:center;gap:10px;">
-    <div class="user-pill">
-        <div class="user-pill-dot"></div>
-        {st.session_state.profile.get("full_name", st.session_state.user.email) if st.session_state.profile else st.session_state.user.email}
-    </div>
+  <div class="user-pill">
+    <div class="user-pill-dot"></div>
+    <span>{_display_name}</span>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-# sign-out button lives outside the HTML so Streamlit handles the click
-_co1, _co2 = st.columns([6, 1])
-with _co2:
+# Small sign-out button — right-aligned, minimal
+_so_col1, _so_col2 = st.columns([10, 1])
+with _so_col2:
+    # CSS override to shrink this specific button
+    st.markdown("""
+    <style>
+    div[data-testid="column"]:last-child .stButton button {
+        font-size: .7rem !important;
+        padding: .2rem .6rem !important;
+        background: transparent !important;
+        border: 1px solid #2a2a2a !important;
+        color: #525252 !important;
+        border-radius: 6px !important;
+        white-space: nowrap !important;
+    }
+    div[data-testid="column"]:last-child .stButton button:hover {
+        border-color: #ef4444 !important;
+        color: #fca5a5 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     if st.button("Sign out", key="signout_btn"):
         try:
             supabase.auth.sign_out()
         except Exception:
             pass
-        for k in ["user", "profile", "db", "processed_chunks", "pipeline_ran",
-                  "chat_history", "summary", "summary_images", "summary_tables",
-                  "doc_name", "all_page_images", "active_doc_id",
-                  "quiz_questions", "quiz_answers", "quiz_submitted",
-                  "logs", "metrics", "anon_uid"]:
-            st.session_state[k] = None if k in ("user", "profile", "db",
-                                                  "summary", "active_doc_id") \
-                                   else [] if k in ("processed_chunks", "chat_history",
-                                                    "summary_images", "summary_tables",
-                                                    "quiz_questions", "logs") \
-                                   else {} if k in ("all_page_images", "quiz_answers",
-                                                    "metrics") \
-                                   else False if k in ("pipeline_ran", "quiz_submitted") \
-                                   else ""
+        for _k, _v in {
+            "user": None, "profile": None, "db": None,
+            "summary": None, "active_doc_id": None,
+            "processed_chunks": [], "chat_history": [],
+            "summary_images": [], "summary_tables": [],
+            "quiz_questions": [], "logs": [],
+            "all_page_images": {}, "quiz_answers": {},
+            "metrics": {"elements": 0, "chunks": 0, "docs": 0},
+            "pipeline_ran": False, "quiz_submitted": False,
+            "doc_name": "", "anon_uid": "",
+            "auth_screen": "signin", "auth_error": "", "auth_ok": "",
+        }.items():
+            st.session_state[_k] = _v
         st.rerun()
+
+# ─── MathJax — only injected after auth passes ───────────
+st.markdown("""
+<script>
+window.MathJax = {
+  tex: { inlineMath: [['$','$']], displayMath: [['$$','$$']] },
+  svg: { fontCache: 'global' }
+};
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" async></script>
+""", unsafe_allow_html=True)
 
 # ─── Hero ────────────────────────────────────────────────
 st.markdown("""
