@@ -10,8 +10,8 @@ import uuid
 
 # ════════════════════════════════════════════════════════
 # ── BRANDING — edit these lines ──────────────────────────
-BRAND_NAME   = "Your Name"           # ← your name or company
-BRAND_LOGO   = ""                    # ← path to logo file e.g. "logo.png", or leave ""
+BRAND_NAME   = "Sadiq Shehu"           # ← your name or company
+BRAND_LOGO   = "sh1.png"                    # ← path to logo file e.g. "logo.png", or leave ""
 APP_SUBTITLE = "Document Intelligence"
 # ════════════════════════════════════════════════════════
 
@@ -50,7 +50,7 @@ except Exception:
 # ─── Page Config ─────────────────────────────────────────
 st.set_page_config(
     page_title=f"{BRAND_NAME} · {APP_SUBTITLE}",
-    page_icon="📄",
+    page_icon="sh1.png",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
@@ -637,6 +637,60 @@ label { color:var(--ash) !important; font-size:.75rem !important; }
 .doc-card.active { border-color: var(--orange); background: rgba(249,115,22,.06); }
 .doc-card-name   { font-size: .88rem; font-weight: 600; color: var(--white); }
 .doc-card-meta   { font-size: .72rem; color: var(--ash); margin-top: 2px; }
+/* ── premium / waitlist ── */
+.premium-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: linear-gradient(135deg, #f97316, #fb923c);
+    color: #000; font-size: .65rem; font-weight: 800;
+    font-family: 'Syne', sans-serif;
+    letter-spacing: .06em; text-transform: uppercase;
+    padding: .2rem .55rem; border-radius: 999px;
+    cursor: pointer;
+}
+.upgrade-nudge {
+    background: linear-gradient(135deg, rgba(249,115,22,.1), rgba(251,146,60,.05));
+    border: 1px solid rgba(249,115,22,.3);
+    border-radius: 12px; padding: 1.1rem 1.4rem;
+    margin: 1rem 0; display: flex;
+    align-items: center; justify-content: space-between;
+    gap: 1rem; flex-wrap: wrap;
+}
+.upgrade-nudge-text { flex: 1; min-width: 180px; }
+.upgrade-nudge-title {
+    font-family: 'Syne', sans-serif; font-weight: 700;
+    font-size: .92rem; color: #fff; margin-bottom: .2rem;
+}
+.upgrade-nudge-sub { font-size: .78rem; color: #a3a3a3; line-height: 1.5; }
+.waitlist-hero {
+    text-align: center; padding: 2rem 1rem 1.5rem 1rem;
+}
+.waitlist-hero-icon { font-size: 2.5rem; margin-bottom: .6rem; }
+.waitlist-hero-title {
+    font-family: 'Syne', sans-serif; font-weight: 800;
+    font-size: 1.5rem; color: #fff;
+    margin-bottom: .4rem;
+}
+.waitlist-hero-sub { font-size: .88rem; color: #a3a3a3; line-height: 1.7; }
+.feature-row {
+    display: flex; gap: .6rem; align-items: flex-start;
+    padding: .65rem 0;
+    border-bottom: 1px solid #1f1f1f;
+}
+.feature-row:last-child { border-bottom: none; }
+.feature-icon { font-size: 1.1rem; flex-shrink: 0; margin-top: 1px; }
+.feature-text { font-size: .85rem; color: #d4d4d4; line-height: 1.5; }
+.feature-text strong { color: #fff; }
+.waitlist-joined {
+    background: rgba(34,197,94,.08);
+    border: 1px solid rgba(34,197,94,.25);
+    border-radius: 12px; padding: 1.4rem;
+    text-align: center; margin: 1rem 0;
+}
+.waitlist-joined-title {
+    font-family: 'Syne', sans-serif; font-weight: 800;
+    font-size: 1.1rem; color: #4ade80; margin-bottom: .4rem;
+}
+.waitlist-joined-sub { font-size: .82rem; color: #a3a3a3; }
 /* ── queue / busy card ── */
 .busy-card {
     background:var(--surface);
@@ -689,7 +743,10 @@ for k, v in {
     "summary_images": [],
     "summary_tables": [],
     "doc_name": "",
-    # ── quiz ──
+    # ── waitlist ──
+    "on_waitlist": False,       # True once user joins
+    "show_upgrade": False,      # True to jump to upgrade tab
+    "upgrade_trigger": "",      # which trigger surfaced the nudge
     "quiz_questions": [],
     "quiz_answers": {},
     "quiz_submitted": False,
@@ -852,6 +909,38 @@ def db_save_quiz(user_id: str, document_id: str,
         }).execute()
     except Exception:
         pass
+
+def db_join_waitlist(user_id: str, full_name: str, email: str,
+                     trigger: str, price_range: str) -> bool:
+    """Add user to waitlist. Returns True on success."""
+    try:
+        supabase.table("waitlist").insert({
+            "user_id":     user_id,
+            "full_name":   full_name,
+            "email":       email,
+            "trigger":     trigger,
+            "price_range": price_range,
+        }).execute()
+        return True
+    except Exception:
+        return False
+
+def db_is_on_waitlist(user_id: str) -> bool:
+    """Check if user already joined the waitlist."""
+    try:
+        r = supabase.table("waitlist").select("id") \
+            .eq("user_id", user_id).limit(1).execute()
+        return bool(r.data)
+    except Exception:
+        return False
+
+def db_waitlist_count() -> int:
+    """Total number of waitlist signups — shown as social proof."""
+    try:
+        r = supabase.table("waitlist").select("id", count="exact").execute()
+        return r.count or 0
+    except Exception:
+        return 0
 
 # ─── Helpers ─────────────────────────────────────────────
 def log(msg, level="info"):
@@ -1683,8 +1772,9 @@ if not st.session_state.user:
 
 # ─── Signed-in: load profile once per session ────────────
 if not st.session_state.profile:
-    st.session_state.profile = db_get_profile(st.session_state.user.id)
+    st.session_state.profile   = db_get_profile(st.session_state.user.id)
     db_touch_last_seen(st.session_state.user.id)
+    st.session_state.on_waitlist = db_is_on_waitlist(st.session_state.user.id)
 
 # ─── Branding Header (only renders when signed in) ────────
 initial = BRAND_NAME[0].upper() if BRAND_NAME else "?"
@@ -1705,7 +1795,7 @@ else:
 
 # Brand bar + user pill — sign out is a separate small button below
 # Brand bar + sign out
-_bar_col, _out_col = st.columns([5, 1])
+_bar_col, _prem_col, _out_col = st.columns([5, 1, 1])
 with _bar_col:
     st.markdown(f"""
     <div class="brand-bar" style="margin-bottom:0">
@@ -1722,6 +1812,12 @@ with _bar_col:
       </div>
     </div>
     """, unsafe_allow_html=True)
+with _prem_col:
+    st.markdown("<div style='padding-top:1rem'></div>", unsafe_allow_html=True)
+    _badge_label = "✓ Waitlisted" if st.session_state.on_waitlist else "⚡ Upgrade"
+    if st.button(_badge_label, key="upgrade_btn", use_container_width=True):
+        st.session_state.show_upgrade   = True
+        st.session_state.upgrade_trigger = "manual"
 with _out_col:
     st.markdown("<div style='padding-top:1rem'></div>", unsafe_allow_html=True)
     if st.button("↪ Sign out", key="signout_btn", use_container_width=True):
@@ -1766,8 +1862,9 @@ then lets you chat with the content or test your understanding.
 """, unsafe_allow_html=True)
 
 # ─── Tabs ────────────────────────────────────────────────
-tab_ingest, tab_summary, tab_query, tab_quiz, tab_logs = st.tabs(
-    ["  📄  Upload & Index  ", "  📋  Summary  ", "  💬  Chat  ", "  🧠  Quiz  ", "  🗒  Logs  "]
+tab_ingest, tab_summary, tab_query, tab_quiz, tab_logs, tab_premium = st.tabs(
+    ["  📄  Upload & Index  ", "  📋  Summary  ", "  💬  Chat  ",
+     "  🧠  Quiz  ", "  🗒  Logs  ", "  ⚡  Premium  "]
 )
 
 # ════════════════════════════════════════════════════════
@@ -2279,6 +2376,12 @@ with tab_ingest:
                 st.session_state.active_doc_id = doc_id
                 log(f"Document saved to DB: {doc_id}", "success")
 
+                # ── trigger upgrade nudge after 3rd document ──
+                if not st.session_state.on_waitlist:
+                    _doc_count = len(db_get_documents(st.session_state.user.id))
+                    if _doc_count >= 3:
+                        st.session_state.upgrade_trigger = "doc_limit"
+
                 # ── open a fresh chat session ──────────────
                 if doc_id:
                     sess_id = db_save_chat_session(st.session_state.user.id, doc_id)
@@ -2620,6 +2723,12 @@ GENERAL EXPLANATION:"""
                             db_save_message(sess_id, "user",      query,  "user")
                             db_save_message(sess_id, "assistant", answer, answer_type)
 
+                        # ── trigger nudge after 10th message ──
+                        if not st.session_state.on_waitlist:
+                            _msg_count = len(st.session_state.chat_history)
+                            if _msg_count >= 10 and not st.session_state.upgrade_trigger:
+                                st.session_state.upgrade_trigger = "chat_limit"
+
                     except Exception as e:
                         st.error(f"Error: {e}")
 
@@ -2853,3 +2962,199 @@ with tab_logs:
         if st.button("🗑 Clear logs"):
             st.session_state.logs = []
             st.rerun()
+
+
+# ════════════════════════════════════════════════════════
+# TAB 6 — PREMIUM / WAITLIST
+# ════════════════════════════════════════════════════════
+with tab_premium:
+
+    _wl_user  = st.session_state.user
+    _wl_prof  = st.session_state.profile or {}
+    _wl_name  = _wl_prof.get("full_name", "") or ""
+    _wl_email = _wl_prof.get("email", "") or _wl_user.email
+    _wl_count = db_waitlist_count()
+
+    # ── already on waitlist ───────────────────────────────
+    if st.session_state.on_waitlist:
+        st.markdown("""
+        <div class="waitlist-hero">
+            <div class="waitlist-hero-icon">🎉</div>
+            <div class="waitlist-hero-title">You're on the list!</div>
+            <div class="waitlist-hero-sub">
+                We'll email you the moment Premium launches.<br>
+                You'll be among the very first to get access.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown(f"""
+        <div class="waitlist-joined">
+            <div class="waitlist-joined-title">✓ Waitlist confirmed</div>
+            <div class="waitlist-joined-sub">
+                {_wl_count} people are waiting for Premium · We'll be in touch soon
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("---")
+        st.markdown("#### While you wait, here's what's coming:")
+
+    # ── not yet on waitlist ───────────────────────────────
+    else:
+        # nudge banner if a trigger fired
+        if st.session_state.upgrade_trigger == "doc_limit":
+            st.markdown("""
+            <div class="upgrade-nudge">
+                <div class="upgrade-nudge-text">
+                    <div class="upgrade-nudge-title">You've indexed 3 documents 🔥</div>
+                    <div class="upgrade-nudge-sub">
+                        Serious users like you are exactly who Premium is built for.
+                        Join the waitlist below to lock in early access.
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        elif st.session_state.upgrade_trigger == "chat_limit":
+            st.markdown("""
+            <div class="upgrade-nudge">
+                <div class="upgrade-nudge-text">
+                    <div class="upgrade-nudge-title">10 messages and counting 💬</div>
+                    <div class="upgrade-nudge-sub">
+                        You're clearly getting value from this. Premium gives you
+                        unlimited chats, bigger documents, and a lot more.
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+        st.markdown("""
+        <div class="waitlist-hero">
+            <div class="waitlist-hero-icon">⚡</div>
+            <div class="waitlist-hero-title">Go Premium — Early Access</div>
+            <div class="waitlist-hero-sub">
+                The free version is powerful. Premium is everything else.<br>
+                Join the waitlist and be first to know when it launches.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        if _wl_count > 0:
+            st.markdown(
+                f'<div style="text-align:center; font-size:.8rem; color:#f97316; '
+                f'margin-bottom:1rem; font-weight:600;">'
+                f'🔥 {_wl_count} people already on the waitlist</div>',
+                unsafe_allow_html=True
+            )
+
+    # ── feature list (always shown) ───────────────────────
+    st.markdown("""
+    <div style="background:#1a1a1a; border:1px solid #2a2a2a;
+                border-radius:12px; padding:1.2rem 1.4rem; margin-bottom:1.5rem;">
+    """, unsafe_allow_html=True)
+
+    features = [
+        ("🚀", "Faster processing",
+         "<strong>Priority queue</strong> — your documents never wait behind other users"),
+        ("📄", "Bigger documents",
+         "Process files up to <strong>500 pages</strong> (free tier: 50 pages)"),
+        ("💬", "Unlimited chat",
+         "<strong>No message limits</strong> — ask as many questions as you need"),
+        ("🧠", "Smarter model",
+         "Answers powered by <strong>GPT-4o</strong> with higher accuracy on complex content"),
+        ("📚", "Document library",
+         "Store and switch between <strong>unlimited documents</strong> in your library"),
+        ("🧩", "Quiz packs",
+         "Save quizzes, track your scores over time, and <strong>share with friends</strong>"),
+        ("📤", "Export answers",
+         "Download your chat history and summaries as <strong>PDF or Word</strong>"),
+        ("🛟", "Priority support",
+         "Direct access to the team — <strong>responses within 24 hours</strong>"),
+    ]
+    for icon, title, desc in features:
+        st.markdown(f"""
+        <div class="feature-row">
+            <div class="feature-icon">{icon}</div>
+            <div class="feature-text"><strong>{title}</strong> — {desc}</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # ── waitlist form (only if not already on it) ─────────
+    if not st.session_state.on_waitlist:
+        st.markdown("### Join the waitlist")
+        st.markdown(
+            '<div style="font-size:.82rem; color:#a3a3a3; margin-bottom:1rem;">'
+            'Takes 10 seconds. No payment needed — just your interest.</div>',
+            unsafe_allow_html=True
+        )
+
+        _wl_name_input  = st.text_input("Your name",
+                                         value=_wl_name, key="wl_name")
+        _wl_email_input = st.text_input("Email address",
+                                         value=_wl_email, key="wl_email")
+
+        st.markdown(
+            '<div style="font-size:.82rem; color:#a3a3a3; margin:.6rem 0 .3rem 0;">'
+            'How much would you pay per month for Premium?</div>',
+            unsafe_allow_html=True
+        )
+        _price = st.radio(
+            "Price range",
+            ["Not sure yet", "$5 – $10 / month", "$10 – $20 / month", "$20+ / month"],
+            key="wl_price",
+            label_visibility="collapsed",
+            horizontal=True,
+        )
+
+        _wl_error = ""
+        if st.button("⚡ Join the waitlist", type="primary",
+                     use_container_width=True, key="wl_submit"):
+            if not _wl_name_input.strip() or not _wl_email_input.strip():
+                _wl_error = "Please fill in your name and email."
+            else:
+                _ok = db_join_waitlist(
+                    user_id     = _wl_user.id,
+                    full_name   = _wl_name_input.strip(),
+                    email       = _wl_email_input.strip(),
+                    trigger     = st.session_state.upgrade_trigger or "manual",
+                    price_range = _price,
+                )
+                if _ok:
+                    st.session_state.on_waitlist     = True
+                    st.session_state.upgrade_trigger = ""
+                    st.rerun()
+                else:
+                    _wl_error = "Something went wrong — please try again."
+
+        if _wl_error:
+            st.error(_wl_error)
+
+        st.markdown(
+            '<div style="font-size:.72rem; color:#525252; text-align:center; '
+            'margin-top:.8rem;">No spam. No payment. Just an early heads-up.</div>',
+            unsafe_allow_html=True
+        )
+
+
+# ── Upgrade nudge banner (shown inline in ingest/chat tabs after triggers) ──
+# Rendered outside tabs so it appears as a floating reminder at page bottom
+if st.session_state.upgrade_trigger and not st.session_state.on_waitlist:
+    _trig_msg = {
+        "doc_limit":  "You've indexed 3 documents — you're a power user. Want more?",
+        "chat_limit": "10 messages sent — you're getting real value. Want unlimited?",
+        "manual":     "Interested in more? Check out Premium.",
+    }.get(st.session_state.upgrade_trigger, "")
+
+    if _trig_msg:
+        st.markdown(f"""
+        <div class="upgrade-nudge" style="margin-top:1.5rem;">
+            <div class="upgrade-nudge-text">
+                <div class="upgrade-nudge-title">{_trig_msg}</div>
+                <div class="upgrade-nudge-sub">
+                    Open the ⚡ Premium tab to see what's coming and join the waitlist.
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
