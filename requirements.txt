@@ -10,6 +10,8 @@ python-pptx
 openpyxl
 python-magic
 PyMuPDF
+pytesseract
+Pillow
 
 # ── LangChain core + providers ───────────────────────────
 langchain-core
