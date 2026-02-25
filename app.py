@@ -10,8 +10,8 @@ import uuid
 
 # ════════════════════════════════════════════════════════
 # ── BRANDING — edit these lines ──────────────────────────
-BRAND_NAME   = "Sadiq Shehu"           # ← your name or company
-BRAND_LOGO   = "sh1.png"                    # ← path to logo file e.g. "logo.png", or leave ""
+BRAND_NAME   = "Your Name"           # ← your name or company
+BRAND_LOGO   = ""                    # ← path to logo file e.g. "logo.png", or leave ""
 APP_SUBTITLE = "Document Intelligence"
 # ════════════════════════════════════════════════════════
 
@@ -36,12 +36,21 @@ try:
     if "GROQ_API_KEY" in st.secrets:
         os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
 except Exception:
-    pass  # running locally with .env — that's fine
+    pass
+
+# ── Supabase client ───────────────────────────────────────
+try:
+    from supabase import create_client, Client as SupabaseClient
+    _SUPA_URL = st.secrets.get("SUPABASE_URL", os.getenv("SUPABASE_URL", ""))
+    _SUPA_KEY = st.secrets.get("SUPABASE_KEY", os.getenv("SUPABASE_KEY", ""))
+    supabase: SupabaseClient = create_client(_SUPA_URL, _SUPA_KEY) if _SUPA_URL and _SUPA_KEY else None
+except Exception:
+    supabase = None
 
 # ─── Page Config ─────────────────────────────────────────
 st.set_page_config(
     page_title=f"{BRAND_NAME} · {APP_SUBTITLE}",
-    page_icon="sh1.png",
+    page_icon="📄",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
@@ -532,6 +541,102 @@ label { color:var(--ash) !important; font-size:.75rem !important; }
     display:flex; justify-content:flex-end;
     margin-bottom:1rem;
 }
+/* ── auth screens ── */
+.auth-wrap {
+    max-width: 420px;
+    margin: 3rem auto 0 auto;
+}
+.auth-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 2.4rem 2.2rem 2rem 2.2rem;
+}
+.auth-logo {
+    text-align: center;
+    margin-bottom: 1.6rem;
+}
+.auth-logo-circle {
+    width: 52px; height: 52px;
+    background: var(--orange);
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: 'Syne', sans-serif;
+    font-weight: 800; font-size: 1.3rem;
+    color: #000; margin-bottom: .5rem;
+}
+.auth-title {
+    font-family: 'Syne', sans-serif;
+    font-weight: 800; font-size: 1.35rem;
+    color: var(--white); text-align: center;
+    margin-bottom: .3rem;
+}
+.auth-sub {
+    font-size: .8rem; color: var(--ash);
+    text-align: center; margin-bottom: 1.6rem;
+}
+.auth-divider {
+    display: flex; align-items: center;
+    gap: .75rem; margin: 1rem 0;
+}
+.auth-divider hr {
+    flex: 1; border: none;
+    border-top: 1px solid var(--border);
+}
+.auth-divider span {
+    font-size: .72rem; color: #525252;
+    white-space: nowrap;
+}
+.auth-switch {
+    text-align: center;
+    font-size: .8rem; color: var(--ash);
+    margin-top: 1.2rem;
+}
+.auth-switch strong { color: var(--orange2); cursor: pointer; }
+.auth-err {
+    background: rgba(239,68,68,.08);
+    border: 1px solid rgba(239,68,68,.25);
+    border-radius: 8px; padding: .6rem .9rem;
+    font-size: .8rem; color: #fca5a5;
+    margin-bottom: .8rem;
+}
+.auth-ok {
+    background: rgba(34,197,94,.08);
+    border: 1px solid rgba(34,197,94,.25);
+    border-radius: 8px; padding: .6rem .9rem;
+    font-size: .8rem; color: #86efac;
+    margin-bottom: .8rem;
+}
+/* user pill in header */
+.user-pill {
+    display: inline-flex; align-items: center;
+    gap: 7px; background: var(--surf2);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: .3rem .75rem .3rem .4rem;
+    font-size: .75rem; color: var(--ash);
+}
+.user-pill-dot {
+    width: 8px; height: 8px;
+    background: #22c55e; border-radius: 50%;
+    flex-shrink: 0;
+}
+/* doc selector card */
+.doc-card {
+    background: var(--surf2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: .75rem 1rem;
+    margin-bottom: .5rem;
+    cursor: pointer;
+    transition: border-color .15s;
+}
+.doc-card:hover  { border-color: var(--orange); }
+.doc-card.active { border-color: var(--orange); background: rgba(249,115,22,.06); }
+.doc-card-name   { font-size: .88rem; font-weight: 600; color: var(--white); }
+.doc-card-meta   { font-size: .72rem; color: var(--ash); margin-top: 2px; }
 /* ── queue / busy card ── */
 .busy-card {
     background:var(--surface);
@@ -571,14 +676,16 @@ window.MathJax = {
 </script>
 <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js" async></script>
 """, unsafe_allow_html=True)
-# User isolation — each browser session gets its own UUID so
-# multiple users never share the same ChromaDB folder or state.
-if "user_id" not in st.session_state:
-    st.session_state.user_id = uuid.uuid4().hex
-
-USER_PERSIST_DIR = os.path.join(DEFAULT_PERSIST_DIR, st.session_state.user_id)
-
+# ── Auth + session state ──────────────────────────────────
 for k, v in {
+    # ── auth ──
+    "user": None,              # Supabase user object after sign-in
+    "profile": None,           # row from public.profiles
+    "auth_screen": "signin",   # "signin" | "signup" | "reset"
+    "auth_error": "",
+    "auth_ok": "",
+    "active_doc_id": None,     # UUID of currently loaded document
+    # ── pipeline ──
     "db": None,
     "processed_chunks": [],
     "pipeline_ran": False,
@@ -586,11 +693,12 @@ for k, v in {
     "metrics": {"elements": 0, "chunks": 0, "docs": 0},
     "chat_history": [],
     "pipeline_busy": False,
+    "all_page_images": {},
     # ── summary ──
-    "summary": None,           # generated summary dict, cached after first run
-    "summary_images": [],      # key figure images selected for summary
-    "summary_tables": [],      # all unique tables found
-    "doc_name": "",            # filename of the indexed document
+    "summary": None,
+    "summary_images": [],
+    "summary_tables": [],
+    "doc_name": "",
     # ── quiz ──
     "quiz_questions": [],
     "quiz_answers": {},
@@ -599,6 +707,16 @@ for k, v in {
 }.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+# Derive user_id: use Supabase uid when signed in, else temp UUID
+if st.session_state.user:
+    _uid = st.session_state.user.id
+else:
+    if "anon_uid" not in st.session_state:
+        st.session_state.anon_uid = uuid.uuid4().hex
+    _uid = st.session_state.anon_uid
+
+USER_PERSIST_DIR = os.path.join(DEFAULT_PERSIST_DIR, _uid)
 
 # ── Global busy flag (shared across all sessions via a temp file) ──────────
 # Stores JSON: {"user_id": "...", "started_at": unix_timestamp}
@@ -644,6 +762,106 @@ def _busy_elapsed_secs() -> int:
     if not d:
         return 0
     return int(time.time() - d.get("started_at", time.time()))
+
+
+# ─── Supabase DB helpers ─────────────────────────────────
+
+def db_get_profile(user_id: str) -> dict:
+    """Fetch profile row for a user."""
+    try:
+        r = supabase.table("profiles").select("*").eq("id", user_id).single().execute()
+        return r.data or {}
+    except Exception:
+        return {}
+
+def db_upsert_profile(user_id: str, full_name: str, email: str):
+    """Create or update profile."""
+    try:
+        supabase.table("profiles").upsert({
+            "id": user_id, "full_name": full_name,
+            "email": email, "last_seen": "now()"
+        }).execute()
+    except Exception:
+        pass
+
+def db_touch_last_seen(user_id: str):
+    try:
+        supabase.table("profiles").update({"last_seen": "now()"}).eq("id", user_id).execute()
+    except Exception:
+        pass
+
+def db_save_document(user_id: str, name: str, file_type: str,
+                     chunk_count: int, page_count: int, persist_dir: str) -> str:
+    """Insert a document record, return its UUID."""
+    try:
+        r = supabase.table("documents").insert({
+            "user_id":     user_id,
+            "name":        name,
+            "file_type":   file_type,
+            "chunk_count": chunk_count,
+            "page_count":  page_count,
+            "persist_dir": persist_dir,
+        }).execute()
+        return r.data[0]["id"] if r.data else None
+    except Exception:
+        return None
+
+def db_get_documents(user_id: str) -> list:
+    """Return all documents for a user, newest first."""
+    try:
+        r = supabase.table("documents").select("*") \
+            .eq("user_id", user_id).order("created_at", desc=True).execute()
+        return r.data or []
+    except Exception:
+        return []
+
+def db_delete_document(doc_id: str):
+    try:
+        supabase.table("documents").delete().eq("id", doc_id).execute()
+    except Exception:
+        pass
+
+def db_save_chat_session(user_id: str, document_id: str) -> str:
+    """Create a chat session, return its UUID."""
+    try:
+        r = supabase.table("chat_sessions").insert({
+            "user_id": user_id, "document_id": document_id
+        }).execute()
+        return r.data[0]["id"] if r.data else None
+    except Exception:
+        return None
+
+def db_save_message(session_id: str, role: str, content: str, answer_type: str = "doc"):
+    try:
+        supabase.table("chat_messages").insert({
+            "session_id":  session_id,
+            "role":        role,
+            "content":     content,
+            "answer_type": answer_type,
+        }).execute()
+    except Exception:
+        pass
+
+def db_get_messages(session_id: str) -> list:
+    try:
+        r = supabase.table("chat_messages").select("*") \
+            .eq("session_id", session_id).order("created_at").execute()
+        return r.data or []
+    except Exception:
+        return []
+
+def db_save_quiz(user_id: str, document_id: str,
+                 difficulty: str, score: int, total: int):
+    try:
+        supabase.table("quiz_sessions").insert({
+            "user_id":     user_id,
+            "document_id": document_id,
+            "difficulty":  difficulty,
+            "score":       score,
+            "total":       total,
+        }).execute()
+    except Exception:
+        pass
 
 # ─── Helpers ─────────────────────────────────────────────
 def log(msg, level="info"):
@@ -1276,6 +1494,202 @@ def generate_summary(doc_name: str) -> dict:
     return summary
 
 
+# ─── Auth UI ─────────────────────────────────────────────
+
+def _auth_logo():
+    initial = BRAND_NAME[0].upper() if BRAND_NAME else "?"
+    st.markdown(f"""
+    <div class="auth-logo">
+        <div class="auth-logo-circle">{initial}</div>
+        <div style="font-family:'Syne',sans-serif;font-weight:800;
+                    font-size:1rem;color:#f5f5f5;">{BRAND_NAME}</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+def _show_auth_error(msg):
+    if msg:
+        st.markdown(f'<div class="auth-err">⚠️ {msg}</div>', unsafe_allow_html=True)
+
+def _show_auth_ok(msg):
+    if msg:
+        st.markdown(f'<div class="auth-ok">✅ {msg}</div>', unsafe_allow_html=True)
+
+def render_signin():
+    st.markdown('<div class="auth-wrap"><div class="auth-card">', unsafe_allow_html=True)
+    _auth_logo()
+    st.markdown('<div class="auth-title">Welcome back</div>', unsafe_allow_html=True)
+    st.markdown('<div class="auth-sub">Sign in to your account</div>', unsafe_allow_html=True)
+
+    _show_auth_error(st.session_state.auth_error)
+    _show_auth_ok(st.session_state.auth_ok)
+
+    email    = st.text_input("Email address", key="si_email",
+                             placeholder="you@example.com")
+    password = st.text_input("Password", type="password", key="si_pass",
+                             placeholder="Your password")
+
+    if st.button("Sign in →", use_container_width=True, type="primary"):
+        st.session_state.auth_error = ""
+        st.session_state.auth_ok    = ""
+        if not email or not password:
+            st.session_state.auth_error = "Please fill in all fields."
+            st.rerun()
+        else:
+            try:
+                res  = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                user = res.user
+                st.session_state.user    = user
+                st.session_state.profile = db_get_profile(user.id)
+                db_touch_last_seen(user.id)
+                st.session_state.auth_error = ""
+                st.session_state.auth_ok    = ""
+                st.rerun()
+            except Exception as e:
+                err = str(e)
+                if "Invalid login" in err or "invalid" in err.lower():
+                    st.session_state.auth_error = "Incorrect email or password."
+                elif "confirmed" in err.lower() or "verify" in err.lower():
+                    st.session_state.auth_error = "Please verify your email first — check your inbox."
+                else:
+                    st.session_state.auth_error = f"Sign in failed: {err}"
+                st.rerun()
+
+    st.markdown('<div class="auth-divider"><hr/><span>or</span><hr/></div>', unsafe_allow_html=True)
+
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("Create account", use_container_width=True):
+            st.session_state.auth_screen = "signup"
+            st.session_state.auth_error  = ""
+            st.session_state.auth_ok     = ""
+            st.rerun()
+    with col2:
+        if st.button("Forgot password", use_container_width=True):
+            st.session_state.auth_screen = "reset"
+            st.session_state.auth_error  = ""
+            st.session_state.auth_ok     = ""
+            st.rerun()
+
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+
+def render_signup():
+    st.markdown('<div class="auth-wrap"><div class="auth-card">', unsafe_allow_html=True)
+    _auth_logo()
+    st.markdown('<div class="auth-title">Create your account</div>', unsafe_allow_html=True)
+    st.markdown('<div class="auth-sub">Free forever. No credit card needed.</div>',
+                unsafe_allow_html=True)
+
+    _show_auth_error(st.session_state.auth_error)
+    _show_auth_ok(st.session_state.auth_ok)
+
+    full_name = st.text_input("Full name",       key="su_name", placeholder="Your name")
+    email     = st.text_input("Email address",   key="su_email", placeholder="you@example.com")
+    password  = st.text_input("Password",        key="su_pass",
+                              type="password", placeholder="At least 6 characters")
+    confirm   = st.text_input("Confirm password", key="su_conf",
+                              type="password", placeholder="Repeat your password")
+
+    if st.button("Create account →", use_container_width=True, type="primary"):
+        st.session_state.auth_error = ""
+        st.session_state.auth_ok    = ""
+        if not all([full_name, email, password, confirm]):
+            st.session_state.auth_error = "Please fill in all fields."
+        elif len(password) < 6:
+            st.session_state.auth_error = "Password must be at least 6 characters."
+        elif password != confirm:
+            st.session_state.auth_error = "Passwords do not match."
+        else:
+            try:
+                res = supabase.auth.sign_up({
+                    "email":    email,
+                    "password": password,
+                    "options":  {"data": {"full_name": full_name}}
+                })
+                if res.user:
+                    st.session_state.auth_ok    = (
+                        "Account created! Check your email to verify your address, "
+                        "then sign in."
+                    )
+                    st.session_state.auth_screen = "signin"
+                else:
+                    st.session_state.auth_error = "Sign up failed — please try again."
+            except Exception as e:
+                err = str(e)
+                if "already registered" in err.lower() or "already exists" in err.lower():
+                    st.session_state.auth_error = "An account with that email already exists."
+                else:
+                    st.session_state.auth_error = f"Sign up failed: {err}"
+        st.rerun()
+
+    st.markdown('<div class="auth-divider"><hr/><span>already have an account?</span><hr/></div>',
+                unsafe_allow_html=True)
+    if st.button("Sign in instead", use_container_width=True):
+        st.session_state.auth_screen = "signin"
+        st.session_state.auth_error  = ""
+        st.session_state.auth_ok     = ""
+        st.rerun()
+
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+
+def render_reset():
+    st.markdown('<div class="auth-wrap"><div class="auth-card">', unsafe_allow_html=True)
+    _auth_logo()
+    st.markdown('<div class="auth-title">Reset password</div>', unsafe_allow_html=True)
+    st.markdown('<div class="auth-sub">We\'ll send you a reset link</div>',
+                unsafe_allow_html=True)
+
+    _show_auth_error(st.session_state.auth_error)
+    _show_auth_ok(st.session_state.auth_ok)
+
+    email = st.text_input("Email address", key="rp_email",
+                          placeholder="you@example.com")
+
+    if st.button("Send reset link →", use_container_width=True, type="primary"):
+        st.session_state.auth_error = ""
+        st.session_state.auth_ok    = ""
+        if not email:
+            st.session_state.auth_error = "Please enter your email address."
+        else:
+            try:
+                supabase.auth.reset_password_email(email)
+                st.session_state.auth_ok = (
+                    "Reset link sent! Check your inbox and follow the link."
+                )
+            except Exception as e:
+                st.session_state.auth_error = f"Failed to send reset email: {e}"
+        st.rerun()
+
+    if st.button("← Back to sign in", use_container_width=True):
+        st.session_state.auth_screen = "signin"
+        st.session_state.auth_error  = ""
+        st.session_state.auth_ok     = ""
+        st.rerun()
+
+    st.markdown('</div></div>', unsafe_allow_html=True)
+
+
+# ─── Auth gate — show auth screens if not signed in ──────
+if supabase is None:
+    st.error("⚠️ Supabase is not configured. Add SUPABASE_URL and SUPABASE_KEY to your secrets.")
+    st.stop()
+
+if not st.session_state.user:
+    if st.session_state.auth_screen == "signup":
+        render_signup()
+    elif st.session_state.auth_screen == "reset":
+        render_reset()
+    else:
+        render_signin()
+    st.stop()   # ← nothing below renders until signed in
+
+# ─── Signed-in: update last_seen once per session ────────
+if not st.session_state.profile:
+    st.session_state.profile = db_get_profile(st.session_state.user.id)
+    db_touch_last_seen(st.session_state.user.id)
+
+
 # ─── Branding Header ─────────────────────────────────────
 initial = BRAND_NAME[0].upper() if BRAND_NAME else "?"
 if BRAND_LOGO and os.path.exists(BRAND_LOGO):
@@ -1296,9 +1710,38 @@ st.markdown(f"""
       <div class="brand-sub">{APP_SUBTITLE}</div>
     </div>
   </div>
-  <div class="brand-pill">Powered by AI</div>
+  <div style="display:flex;align-items:center;gap:10px;">
+    <div class="user-pill">
+        <div class="user-pill-dot"></div>
+        {st.session_state.profile.get("full_name", st.session_state.user.email) if st.session_state.profile else st.session_state.user.email}
+    </div>
+  </div>
 </div>
 """, unsafe_allow_html=True)
+
+# sign-out button lives outside the HTML so Streamlit handles the click
+_co1, _co2 = st.columns([6, 1])
+with _co2:
+    if st.button("Sign out", key="signout_btn"):
+        try:
+            supabase.auth.sign_out()
+        except Exception:
+            pass
+        for k in ["user", "profile", "db", "processed_chunks", "pipeline_ran",
+                  "chat_history", "summary", "summary_images", "summary_tables",
+                  "doc_name", "all_page_images", "active_doc_id",
+                  "quiz_questions", "quiz_answers", "quiz_submitted",
+                  "logs", "metrics", "anon_uid"]:
+            st.session_state[k] = None if k in ("user", "profile", "db",
+                                                  "summary", "active_doc_id") \
+                                   else [] if k in ("processed_chunks", "chat_history",
+                                                    "summary_images", "summary_tables",
+                                                    "quiz_questions", "logs") \
+                                   else {} if k in ("all_page_images", "quiz_answers",
+                                                    "metrics") \
+                                   else False if k in ("pipeline_ran", "quiz_submitted") \
+                                   else ""
+        st.rerun()
 
 # ─── Hero ────────────────────────────────────────────────
 st.markdown("""
@@ -1336,6 +1779,66 @@ SUPPORTED_TYPES = {
 
 with tab_ingest:
 
+    # ── My Documents ─────────────────────────────────────
+    user_docs = db_get_documents(st.session_state.user.id) if st.session_state.user else []
+
+    if user_docs:
+        st.markdown('<div class="sec-div"><hr/><span class="sec-lbl">My Documents</span><hr/></div>',
+                    unsafe_allow_html=True)
+        for doc in user_docs:
+            is_active = st.session_state.active_doc_id == doc["id"]
+            active_cls = "active" if is_active else ""
+            created = doc.get("created_at", "")[:10]
+            col_doc, col_del = st.columns([5, 1])
+            with col_doc:
+                st.markdown(f"""
+                <div class="doc-card {active_cls}">
+                    <div class="doc-card-name">📄 {doc['name']}</div>
+                    <div class="doc-card-meta">{doc.get('file_type','').upper()} · 
+                    {doc.get('chunk_count',0)} chunks · {created}</div>
+                </div>
+                """, unsafe_allow_html=True)
+                if st.button("Load this document", key=f"load_{doc['id']}",
+                             use_container_width=True):
+                    # restore this document's chroma db into session
+                    persist = doc.get("persist_dir", "")
+                    if persist and os.path.exists(persist):
+                        try:
+                            from langchain_huggingface import HuggingFaceEmbeddings
+                            from langchain_chroma import Chroma
+                            embeddings = HuggingFaceEmbeddings(
+                                model_name=DEFAULT_EMBED_MODEL,
+                                model_kwargs={"device": "cpu"},
+                            )
+                            st.session_state.db = Chroma(
+                                persist_directory=persist,
+                                embedding_function=embeddings,
+                                collection_metadata={"hnsw:space": "cosine"},
+                            )
+                            st.session_state.pipeline_ran  = True
+                            st.session_state.doc_name      = doc["name"]
+                            st.session_state.active_doc_id = doc["id"]
+                            st.session_state.chat_history  = []
+                            st.session_state.summary       = None
+                            st.success(f"✅ Loaded: {doc['name']}")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Could not load document: {e}")
+                    else:
+                        st.warning("Document index not found on disk — please re-index.")
+            with col_del:
+                if st.button("🗑️", key=f"del_{doc['id']}",
+                             help="Delete this document"):
+                    db_delete_document(doc["id"])
+                    if st.session_state.active_doc_id == doc["id"]:
+                        st.session_state.pipeline_ran  = False
+                        st.session_state.db            = None
+                        st.session_state.active_doc_id = None
+                    st.rerun()
+
+        st.markdown('<div class="sec-div"><hr/><span class="sec-lbl">Index New Document</span><hr/></div>',
+                    unsafe_allow_html=True)
+
     uploaded_file = st.file_uploader(
         "Upload document",
         type=list(SUPPORTED_TYPES.keys()),
@@ -1358,11 +1861,11 @@ with tab_ingest:
 
     run_btn = st.button(
         "Run Pipeline →",
-        disabled=(uploaded_file is None or (_global_busy() and _busy_user() != st.session_state.user_id))
+        disabled=(uploaded_file is None or (_global_busy() and _busy_user() != _uid))
     )
 
     # ── busy notice for OTHER users ──────────────────────
-    if _global_busy() and _busy_user() != st.session_state.user_id:
+    if _global_busy() and _busy_user() != _uid:
         elapsed  = _busy_elapsed_secs()
         remain   = max(0, PIPELINE_TIMEOUT_SECS - elapsed)
         mins_el  = elapsed // 60
@@ -1435,9 +1938,9 @@ with tab_ingest:
                 st.markdown(f'<div class="chunk-card">{preview}</div>', unsafe_allow_html=True)
 
     # ── pipeline execution ──
-    if run_btn and uploaded_file and not (_global_busy() and _busy_user() != st.session_state.user_id):
+    if run_btn and uploaded_file and not (_global_busy() and _busy_user() != _uid):
         st.session_state.logs = []
-        _set_global_busy(True, st.session_state.user_id)  # 🔒 lock
+        _set_global_busy(True, _uid)  # 🔒 lock
 
         with st.status("Running pipeline…", expanded=True) as status:
             try:
@@ -1640,10 +2143,27 @@ with tab_ingest:
                 st.session_state.metrics["docs"]  = len(docs)
                 st.session_state.pipeline_ran      = True
                 st.session_state.doc_name          = uploaded_file.name
-                st.session_state.all_page_images   = page_images   # full page renders
-                st.session_state.summary           = None           # reset so it regenerates
+                st.session_state.all_page_images   = page_images
+                st.session_state.summary           = None
                 log(f"Vector store ready → {USER_PERSIST_DIR}", "success")
                 st.write(f"✅ {len(docs)} docs indexed")
+
+                # ── save document record to Supabase ──────
+                doc_id = db_save_document(
+                    user_id     = st.session_state.user.id,
+                    name        = uploaded_file.name,
+                    file_type   = ext,
+                    chunk_count = len(docs),
+                    page_count  = len(page_images),
+                    persist_dir = USER_PERSIST_DIR,
+                )
+                st.session_state.active_doc_id = doc_id
+                log(f"Document saved to DB: {doc_id}", "success")
+
+                # ── open a fresh chat session ──────────────
+                if doc_id:
+                    sess_id = db_save_chat_session(st.session_state.user.id, doc_id)
+                    st.session_state.chat_session_id = sess_id
 
                 # 5 ─ generate summary
                 st.write("📝 Generating document summary…")
@@ -1975,6 +2495,12 @@ GENERAL EXPLANATION:"""
                             "images":      chunk_images,
                         })
 
+                        # ── persist to Supabase ───────────
+                        sess_id = st.session_state.get("chat_session_id")
+                        if sess_id:
+                            db_save_message(sess_id, "user",      query,  "user")
+                            db_save_message(sess_id, "assistant", answer, answer_type)
+
                     except Exception as e:
                         st.error(f"Error: {e}")
 
@@ -2090,12 +2616,24 @@ with tab_quiz:
 
                 submitted = st.form_submit_button("✅ Submit Answers")
                 if submitted:
-                    # check all answered
                     if any(v is None for v in user_answers.values()):
                         st.warning("Please answer all questions before submitting.")
                     else:
-                        st.session_state.quiz_answers   = user_answers
-                        st.session_state.quiz_submitted  = True
+                        st.session_state.quiz_answers  = user_answers
+                        st.session_state.quiz_submitted = True
+                        # ── save quiz result to Supabase ──
+                        total_q   = len(st.session_state.quiz_questions)
+                        correct_q = sum(
+                            1 for i, q in enumerate(st.session_state.quiz_questions)
+                            if user_answers.get(i) == q["answer"]
+                        )
+                        db_save_quiz(
+                            user_id     = st.session_state.user.id,
+                            document_id = st.session_state.get("active_doc_id"),
+                            difficulty  = st.session_state.get("quiz_difficulty", "medium"),
+                            score       = correct_q,
+                            total       = total_q,
+                        )
                         st.rerun()
 
         # ── results screen ────────────────────────────────
