@@ -1958,17 +1958,82 @@ with tab_ingest:
                 from langchain_chroma import Chroma
                 log("Modules loaded", "success")
 
-                # 1 ─ partition (route by file type)
+                # 1 ─ partition (route by file type) ──────────────────────
                 f_label = SUPPORTED_TYPES.get(ext, ("Document", "📄"))[0]
                 st.write(f"📄 Partitioning {f_label}…")
 
+                elements = []
+
                 if ext == "pdf":
-                    from unstructured.partition.pdf import partition_pdf
-                    elements = partition_pdf(
-                        filename=tmp_path,
-                        strategy="fast",           # hi_res needs detectron2 — too heavy for cloud
-                        infer_table_structure=True,
-                    )
+                    # ── Tier 1: unstructured fast (best structured output) ──
+                    try:
+                        from unstructured.partition.pdf import partition_pdf
+                        elements = partition_pdf(
+                            filename=tmp_path,
+                            strategy="fast",
+                            infer_table_structure=True,
+                        )
+                        log(f"Tier 1 (unstructured fast): {len(elements)} elements")
+                    except Exception as e:
+                        log(f"Tier 1 failed: {e}", "error")
+                        elements = []
+
+                    # ── Tier 2: PyMuPDF text extraction ───────────────────
+                    if not elements:
+                        st.write("⚠️ Standard extraction got 0 elements — trying PyMuPDF text…")
+                        try:
+                            import fitz
+                            from unstructured.documents.elements import Text, Title
+                            doc_fitz = fitz.open(tmp_path)
+                            for page in doc_fitz:
+                                page_text = page.get_text("text").strip()
+                                if page_text:
+                                    # split into paragraphs on double newlines
+                                    blocks = [b.strip() for b in page_text.split("\n\n") if b.strip()]
+                                    for j, block in enumerate(blocks):
+                                        # first block of each page treated as title candidate
+                                        if j == 0 and len(block) < 120:
+                                            el = Title(text=block)
+                                        else:
+                                            el = Text(text=block)
+                                        el.metadata.page_number = page.number + 1
+                                        elements.append(el)
+                            doc_fitz.close()
+                            log(f"Tier 2 (PyMuPDF text): {len(elements)} elements")
+                            if elements:
+                                st.write(f"✅ PyMuPDF extracted {len(elements)} text blocks")
+                        except Exception as e:
+                            log(f"Tier 2 failed: {e}", "error")
+                            elements = []
+
+                    # ── Tier 3: Tesseract OCR on page renders ─────────────
+                    if not elements:
+                        st.write("⚠️ No text layer found — running OCR on page images…")
+                        try:
+                            import fitz
+                            import pytesseract
+                            from PIL import Image as PILImage
+                            import io
+                            from unstructured.documents.elements import Text
+                            doc_fitz  = fitz.open(tmp_path)
+                            matrix    = fitz.Matrix(2.0, 2.0)   # 2x scale for better OCR
+                            for page in doc_fitz:
+                                pix      = page.get_pixmap(matrix=matrix, alpha=False)
+                                img      = PILImage.open(io.BytesIO(pix.tobytes("png")))
+                                ocr_text = pytesseract.image_to_string(img).strip()
+                                if ocr_text:
+                                    blocks = [b.strip() for b in ocr_text.split("\n\n") if b.strip()]
+                                    for block in blocks:
+                                        el = Text(text=block)
+                                        el.metadata.page_number = page.number + 1
+                                        elements.append(el)
+                            doc_fitz.close()
+                            log(f"Tier 3 (OCR): {len(elements)} elements")
+                            if elements:
+                                st.write(f"✅ OCR extracted {len(elements)} text blocks")
+                        except Exception as e:
+                            log(f"Tier 3 (OCR) failed: {e}", "error")
+
                 elif ext == "docx":
                     from unstructured.partition.docx import partition_docx
                     elements = partition_docx(filename=tmp_path)
@@ -1979,8 +2044,19 @@ with tab_ingest:
                     from unstructured.partition.xlsx import partition_xlsx
                     elements = partition_xlsx(filename=tmp_path)
                 elif ext in ("png", "jpg", "jpeg"):
-                    from unstructured.partition.image import partition_image
-                    elements = partition_image(filename=tmp_path, strategy="fast")
+                    # images: OCR directly
+                    try:
+                        import pytesseract
+                        from PIL import Image as PILImage
+                        from unstructured.documents.elements import Text
+                        img      = PILImage.open(tmp_path)
+                        ocr_text = pytesseract.image_to_string(img).strip()
+                        if ocr_text:
+                            for block in [b.strip() for b in ocr_text.split("\n\n") if b.strip()]:
+                                elements.append(Text(text=block))
+                    except Exception:
+                        from unstructured.partition.image import partition_image
+                        elements = partition_image(filename=tmp_path, strategy="fast")
                 elif ext == "html":
                     from unstructured.partition.html import partition_html
                     elements = partition_html(filename=tmp_path)
@@ -1993,14 +2069,24 @@ with tab_ingest:
                 else:
                     from unstructured.partition.auto import partition
                     elements = partition(filename=tmp_path)
+
+                # final check — if still empty after all fallbacks, abort cleanly
+                if not elements:
+                    raise ValueError(
+                        "Could not extract any text from this document after trying "
+                        "three methods (unstructured, PyMuPDF text layer, OCR). "
+                        "The file may be corrupted, password-protected, or contain "
+                        "only non-readable content."
+                    )
+
                 st.session_state.metrics["elements"] = len(elements)
-                log(f"{len(elements)} elements extracted", "success")
+                log(f"{len(elements)} elements extracted total", "success")
                 st.write(f"✅ {len(elements)} elements extracted")
 
-                # 1b ─ extract page images (PyMuPDF for PDF, native for others)
+                # 1b ─ extract page images ────────────────────────────────
                 st.write("🖼️ Extracting images…")
-                page_images = {}      # {page_number: base64} for PDF
-                loose_images = []     # flat list for DOCX/PPTX
+                page_images  = {}
+                loose_images = []
 
                 if ext == "pdf":
                     page_images = extract_images_from_pdf(tmp_path, dpi=150)
@@ -2015,15 +2101,36 @@ with tab_ingest:
                 if page_images or loose_images:
                     st.write(f"✅ {len(page_images) or len(loose_images)} image(s) captured")
 
-                # 2 ─ chunk
+                # 2 ─ chunk ───────────────────────────────────────────────
                 st.write("🔨 Chunking…")
-                chunks = chunk_by_title(
-                    elements,
-                    max_characters=DEFAULT_MAX_CHARS,
-                    new_after_n_chars=DEFAULT_NEW_AFTER,
-                    combine_text_under_n_chars=DEFAULT_COMBINE,
-                )
-                # attach page-rendered images to each chunk by page number
+                try:
+                    chunks = chunk_by_title(
+                        elements,
+                        max_characters=DEFAULT_MAX_CHARS,
+                        new_after_n_chars=DEFAULT_NEW_AFTER,
+                        combine_text_under_n_chars=DEFAULT_COMBINE,
+                    )
+                except Exception:
+                    # chunk_by_title occasionally fails on synthetic elements
+                    # fall back to simple fixed-size chunking
+                    from langchain_core.documents import Document as LC_Doc
+                    from unstructured.documents.elements import Text as UText
+                    chunk_size = DEFAULT_MAX_CHARS
+                    all_text   = "\n\n".join(el.text for el in elements if hasattr(el, "text") and el.text)
+                    raw_chunks = [all_text[i:i+chunk_size] for i in range(0, len(all_text), chunk_size)]
+
+                    # wrap as minimal objects with .text attribute
+                    class _SimpleChunk:
+                        def __init__(self, text, page_num=None):
+                            self.text = text
+                            class _Meta:
+                                pass
+                            self.metadata         = _Meta()
+                            self.metadata.page_number    = page_num
+                            self.metadata.orig_elements  = []
+                    chunks = [_SimpleChunk(t) for t in raw_chunks if t.strip()]
+                    log("Used simple fixed-size chunking fallback", "error")
+
                 if page_images:
                     chunks = attach_page_images_to_chunks(chunks, page_images)
 
