@@ -10,8 +10,8 @@ import uuid
 
 # ════════════════════════════════════════════════════════
 # ── BRANDING — edit these lines ──────────────────────────
-BRAND_NAME   = "Your Name"           # ← your name or company
-BRAND_LOGO   = ""                    # ← path to logo file e.g. "logo.png", or leave ""
+BRAND_NAME   = "Sadiq Shehu"           # ← your name or company
+BRAND_LOGO   = "sh1.png"                    # ← path to logo file e.g. "logo.png", or leave ""
 APP_SUBTITLE = "Document Intelligence"
 # ════════════════════════════════════════════════════════
 
@@ -50,7 +50,7 @@ except Exception:
 # ─── Page Config ─────────────────────────────────────────
 st.set_page_config(
     page_title=f"{BRAND_NAME} · {APP_SUBTITLE}",
-    page_icon="📄",
+    page_icon="sh1.png",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
@@ -1795,32 +1795,35 @@ else:
 
 # Brand bar + user pill — sign out is a separate small button below
 # Brand bar + sign out
-_bar_col, _prem_col, _out_col = st.columns([5, 1, 1])
-with _bar_col:
-    st.markdown(f"""
-    <div class="brand-bar" style="margin-bottom:0">
-      <div class="brand-left">
-        {logo_html}
-        <div>
-          <div class="brand-name">{BRAND_NAME}</div>
-          <div class="brand-sub">{APP_SUBTITLE}</div>
-        </div>
-      </div>
-      <div class="user-pill">
-        <div class="user-pill-dot"></div>
-        <span>{_display_name}</span>
-      </div>
+# ── single HTML header bar with inline action buttons ────
+_upgrade_label = "✓ Waitlisted" if st.session_state.on_waitlist else "⚡ Upgrade"
+
+st.markdown(f"""
+<div class="brand-bar" style="margin-bottom:0; align-items:center;">
+  <div class="brand-left">
+    {logo_html}
+    <div>
+      <div class="brand-name">{BRAND_NAME}</div>
+      <div class="brand-sub">{APP_SUBTITLE}</div>
     </div>
-    """, unsafe_allow_html=True)
-with _prem_col:
-    st.markdown("<div style='padding-top:1rem'></div>", unsafe_allow_html=True)
-    _badge_label = "✓ Waitlisted" if st.session_state.on_waitlist else "⚡ Upgrade"
-    if st.button(_badge_label, key="upgrade_btn", use_container_width=True):
-        st.session_state.show_upgrade   = True
+  </div>
+  <div style="display:flex; align-items:center; gap:10px; margin-left:auto;">
+    <div class="user-pill">
+      <div class="user-pill-dot"></div>
+      <span>{_display_name}</span>
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+# Buttons in a tight right-aligned row using narrow columns
+_sp, _b1, _b2 = st.columns([6, 1, 1])
+with _b1:
+    if st.button(_upgrade_label, key="upgrade_btn", use_container_width=True):
+        st.session_state.show_upgrade    = True
         st.session_state.upgrade_trigger = "manual"
-with _out_col:
-    st.markdown("<div style='padding-top:1rem'></div>", unsafe_allow_html=True)
-    if st.button("↪ Sign out", key="signout_btn", use_container_width=True):
+with _b2:
+    if st.button("Sign out", key="signout_btn", use_container_width=True):
         try:
             supabase.auth.sign_out()
         except Exception:
@@ -1839,6 +1842,36 @@ with _out_col:
         }.items():
             st.session_state[_k] = _v
         st.rerun()
+
+# shrink just these two buttons — small, subtle, not orange
+st.markdown("""
+<style>
+[data-testid="stHorizontalBlock"]:has([data-testid="stButton"]) + div,
+div:has(> [data-testid="stHorizontalBlock"]) { margin-top: -1rem; }
+section[data-testid="stMain"] > div > div > div:nth-child(4) button,
+section[data-testid="stMain"] > div > div > div:nth-child(5) button {
+    font-size: .72rem !important;
+    padding: .25rem .7rem !important;
+    background: #1a1a1a !important;
+    border: 1px solid #2a2a2a !important;
+    color: #a3a3a3 !important;
+    border-radius: 6px !important;
+    font-weight: 500 !important;
+    min-height: unset !important;
+    height: auto !important;
+    line-height: 1.4 !important;
+    white-space: nowrap !important;
+}
+section[data-testid="stMain"] > div > div > div:nth-child(4) button:hover {
+    border-color: #f97316 !important;
+    color: #f97316 !important;
+}
+section[data-testid="stMain"] > div > div > div:nth-child(5) button:hover {
+    border-color: #ef4444 !important;
+    color: #fca5a5 !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # ─── MathJax — only injected after auth passes ───────────
 st.markdown("""
