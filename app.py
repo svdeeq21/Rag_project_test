@@ -1796,6 +1796,8 @@ else:
 # Brand bar + user pill — sign out is a separate small button below
 # Brand bar + sign out
 # ── handle header actions via query params ───────────────
+# Only sign-out uses query params (needs full page reload to clear state)
+# Upgrade is handled via session state directly — no reload needed
 _qp = st.query_params
 if _qp.get("action") == "signout":
     st.query_params.clear()
@@ -1818,12 +1820,6 @@ if _qp.get("action") == "signout":
         st.session_state[_k] = _v
     st.rerun()
 
-if _qp.get("action") == "upgrade":
-    st.query_params.clear()
-    st.session_state.show_upgrade    = True
-    st.session_state.upgrade_trigger = "manual"
-    
-
 # ── brand bar — everything in one HTML row ────────────────
 _upgrade_label = "✓ Waitlisted" if st.session_state.on_waitlist else "⚡ Upgrade"
 
@@ -1841,26 +1837,13 @@ st.markdown(f"""
       <div class="user-pill-dot"></div>
       <span>{_display_name}</span>
     </div>
-    <a href="?action=upgrade" target="_self" style="
-        display:inline-flex; align-items:center; gap:4px;
-        background:#1a1a1a; border:1px solid #2a2a2a;
-        color:#a3a3a3; font-size:.72rem; font-weight:500;
-        padding:.3rem .75rem; border-radius:6px;
-        text-decoration:none; white-space:nowrap;
-        font-family:'Inter',sans-serif;
-        transition: border-color .15s, color .15s;"
-        onmouseover="this.style.borderColor='#f97316';this.style.color='#f97316'"
-        onmouseout="this.style.borderColor='#2a2a2a';this.style.color='#a3a3a3'">
-      {_upgrade_label}
-    </a>
     <a href="?action=signout" target="_self" style="
-        display:inline-flex; align-items:center; gap:4px;
+        display:inline-flex; align-items:center;
         background:#1a1a1a; border:1px solid #2a2a2a;
         color:#a3a3a3; font-size:.72rem; font-weight:500;
         padding:.3rem .75rem; border-radius:6px;
         text-decoration:none; white-space:nowrap;
-        font-family:'Inter',sans-serif;
-        transition: border-color .15s, color .15s;"
+        font-family:'Inter',sans-serif;"
         onmouseover="this.style.borderColor='#ef4444';this.style.color='#fca5a5'"
         onmouseout="this.style.borderColor='#2a2a2a';this.style.color='#a3a3a3'">
       Sign out
@@ -1868,6 +1851,43 @@ st.markdown(f"""
   </div>
 </div>
 """, unsafe_allow_html=True)
+
+# Upgrade button — st.button so it can set session state without page reload
+# Hidden via CSS into the top-right corner visually
+st.markdown("""
+<style>
+div[data-testid="stButton"].upgrade-btn-wrap > button {
+    position: fixed !important;
+    top: 18px !important;
+    right: 110px !important;
+    z-index: 9999 !important;
+    background: #1a1a1a !important;
+    border: 1px solid #2a2a2a !important;
+    color: #a3a3a3 !important;
+    font-size: .72rem !important;
+    font-weight: 500 !important;
+    padding: .3rem .75rem !important;
+    border-radius: 6px !important;
+    min-height: unset !important;
+    height: auto !important;
+    line-height: 1.4 !important;
+    white-space: nowrap !important;
+    box-shadow: none !important;
+}
+div[data-testid="stButton"].upgrade-btn-wrap > button:hover {
+    border-color: #f97316 !important;
+    color: #f97316 !important;
+    background: #1a1a1a !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
+# inject the class onto the next button via markdown trick
+st.markdown('<div class="upgrade-btn-wrap">', unsafe_allow_html=True)
+if st.button(_upgrade_label, key="upgrade_btn"):
+    st.session_state.show_upgrade    = True
+    st.session_state.upgrade_trigger = "manual"
+st.markdown('</div>', unsafe_allow_html=True)
 
 # ─── MathJax — only injected after auth passes ───────────
 st.markdown("""
@@ -3097,7 +3117,7 @@ with tab_premium:
          "Save quizzes, track your scores over time, and <strong>share with friends</strong>"),
         ("📤", "Export answers",
          "Download your chat history and summaries as <strong>PDF or Word</strong>"),
-        ("🛟", "Priority support",
+        ("✉", "Priority support",
          "Direct access to the team — <strong>responses within 24 hours</strong>"),
     ]
     for icon, title, desc in features:
