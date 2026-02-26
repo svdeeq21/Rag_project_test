@@ -1576,8 +1576,6 @@ def generate_summary(doc_name: str) -> dict:
 # ─── Auth UI ─────────────────────────────────────────────
 
 def _auth_header(title: str, subtitle: str):
-    """Renders the logo, brand name, title and subtitle for auth screens."""
-    initial = BRAND_NAME[0].upper() if BRAND_NAME else "?"
     st.markdown(f"""
     <div style="text-align:center; padding: 2rem 0 1.5rem 0;">
         <div style="
@@ -1585,11 +1583,11 @@ def _auth_header(title: str, subtitle: str):
             display:inline-flex; align-items:center; justify-content:center;
             font-family:'Syne',sans-serif; font-weight:800; font-size:1.3rem;
             color:#000; margin-bottom:.6rem;">
-            {initial}
+            M
         </div>
         <div style="font-family:'Syne',sans-serif; font-weight:800;
                     font-size:1rem; color:#f5f5f5; margin-bottom:1.2rem;">
-            {BRAND_NAME}
+            MentorAI
         </div>
         <div style="font-family:'Syne',sans-serif; font-weight:800;
                     font-size:1.35rem; color:#ffffff; margin-bottom:.3rem;">
@@ -1600,6 +1598,7 @@ def _auth_header(title: str, subtitle: str):
         </div>
     </div>
     """, unsafe_allow_html=True)
+
 
 def render_signin():
     # center the form with columns
