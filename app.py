@@ -1852,43 +1852,6 @@ st.markdown(f"""
 </div>
 """, unsafe_allow_html=True)
 
-# Upgrade button — st.button so it can set session state without page reload
-# Hidden via CSS into the top-right corner visually
-st.markdown("""
-<style>
-div[data-testid="stButton"].upgrade-btn-wrap > button {
-    position: fixed !important;
-    top: 18px !important;
-    right: 110px !important;
-    z-index: 9999 !important;
-    background: #1a1a1a !important;
-    border: 1px solid #2a2a2a !important;
-    color: #a3a3a3 !important;
-    font-size: .72rem !important;
-    font-weight: 500 !important;
-    padding: .3rem .75rem !important;
-    border-radius: 6px !important;
-    min-height: unset !important;
-    height: auto !important;
-    line-height: 1.4 !important;
-    white-space: nowrap !important;
-    box-shadow: none !important;
-}
-div[data-testid="stButton"].upgrade-btn-wrap > button:hover {
-    border-color: #f97316 !important;
-    color: #f97316 !important;
-    background: #1a1a1a !important;
-}
-</style>
-""", unsafe_allow_html=True)
-
-# inject the class onto the next button via markdown trick
-st.markdown('<div class="upgrade-btn-wrap">', unsafe_allow_html=True)
-if st.button(_upgrade_label, key="upgrade_btn"):
-    st.session_state.show_upgrade    = True
-    st.session_state.upgrade_trigger = "manual"
-st.markdown('</div>', unsafe_allow_html=True)
-
 # ─── MathJax — only injected after auth passes ───────────
 st.markdown("""
 <script>
