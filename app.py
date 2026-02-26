@@ -10,8 +10,8 @@ import uuid
 
 # ════════════════════════════════════════════════════════
 # ── BRANDING — edit these lines ──────────────────────────
-BRAND_NAME   = "Sadiq Shehu"           # ← your name or company
-BRAND_LOGO   = "sh1.png"                    # ← path to logo file e.g. "logo.png", or leave ""
+BRAND_NAME   = "Your Name"           # ← your name or company
+BRAND_LOGO   = ""                    # ← path to logo file e.g. "logo.png", or leave ""
 APP_SUBTITLE = "Document Intelligence"
 # ════════════════════════════════════════════════════════
 
@@ -50,7 +50,7 @@ except Exception:
 # ─── Page Config ─────────────────────────────────────────
 st.set_page_config(
     page_title=f"{BRAND_NAME} · {APP_SUBTITLE}",
-    page_icon="sh1.png",
+    page_icon="📄",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
