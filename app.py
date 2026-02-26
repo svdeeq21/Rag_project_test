@@ -1795,11 +1795,40 @@ else:
 
 # Brand bar + user pill — sign out is a separate small button below
 # Brand bar + sign out
-# ── single HTML header bar with inline action buttons ────
+# ── handle header actions via query params ───────────────
+_qp = st.query_params
+if _qp.get("action") == "signout":
+    st.query_params.clear()
+    try:
+        supabase.auth.sign_out()
+    except Exception:
+        pass
+    for _k, _v in {
+        "user": None, "profile": None, "db": None,
+        "summary": None, "active_doc_id": None,
+        "processed_chunks": [], "chat_history": [],
+        "summary_images": [], "summary_tables": [],
+        "quiz_questions": [], "logs": [],
+        "all_page_images": {}, "quiz_answers": {},
+        "metrics": {"elements": 0, "chunks": 0, "docs": 0},
+        "pipeline_ran": False, "quiz_submitted": False,
+        "doc_name": "", "anon_uid": "",
+        "auth_screen": "signin", "auth_error": "", "auth_ok": "",
+    }.items():
+        st.session_state[_k] = _v
+    st.rerun()
+
+if _qp.get("action") == "upgrade":
+    st.query_params.clear()
+    st.session_state.show_upgrade    = True
+    st.session_state.upgrade_trigger = "manual"
+    st.rerun()
+
+# ── brand bar — everything in one HTML row ────────────────
 _upgrade_label = "✓ Waitlisted" if st.session_state.on_waitlist else "⚡ Upgrade"
 
 st.markdown(f"""
-<div class="brand-bar" style="margin-bottom:0; align-items:center;">
+<div class="brand-bar">
   <div class="brand-left">
     {logo_html}
     <div>
@@ -1807,70 +1836,37 @@ st.markdown(f"""
       <div class="brand-sub">{APP_SUBTITLE}</div>
     </div>
   </div>
-  <div style="display:flex; align-items:center; gap:10px; margin-left:auto;">
+  <div style="display:flex; align-items:center; gap:8px; margin-left:auto; flex-shrink:0;">
     <div class="user-pill">
       <div class="user-pill-dot"></div>
       <span>{_display_name}</span>
     </div>
+    <a href="?action=upgrade" target="_self" style="
+        display:inline-flex; align-items:center; gap:4px;
+        background:#1a1a1a; border:1px solid #2a2a2a;
+        color:#a3a3a3; font-size:.72rem; font-weight:500;
+        padding:.3rem .75rem; border-radius:6px;
+        text-decoration:none; white-space:nowrap;
+        font-family:'Inter',sans-serif;
+        transition: border-color .15s, color .15s;"
+        onmouseover="this.style.borderColor='#f97316';this.style.color='#f97316'"
+        onmouseout="this.style.borderColor='#2a2a2a';this.style.color='#a3a3a3'">
+      {_upgrade_label}
+    </a>
+    <a href="?action=signout" target="_self" style="
+        display:inline-flex; align-items:center; gap:4px;
+        background:#1a1a1a; border:1px solid #2a2a2a;
+        color:#a3a3a3; font-size:.72rem; font-weight:500;
+        padding:.3rem .75rem; border-radius:6px;
+        text-decoration:none; white-space:nowrap;
+        font-family:'Inter',sans-serif;
+        transition: border-color .15s, color .15s;"
+        onmouseover="this.style.borderColor='#ef4444';this.style.color='#fca5a5'"
+        onmouseout="this.style.borderColor='#2a2a2a';this.style.color='#a3a3a3'">
+      Sign out
+    </a>
   </div>
 </div>
-""", unsafe_allow_html=True)
-
-# Buttons in a tight right-aligned row using narrow columns
-_sp, _b1, _b2 = st.columns([6, 1, 1])
-with _b1:
-    if st.button(_upgrade_label, key="upgrade_btn", use_container_width=True):
-        st.session_state.show_upgrade    = True
-        st.session_state.upgrade_trigger = "manual"
-with _b2:
-    if st.button("Sign out", key="signout_btn", use_container_width=True):
-        try:
-            supabase.auth.sign_out()
-        except Exception:
-            pass
-        for _k, _v in {
-            "user": None, "profile": None, "db": None,
-            "summary": None, "active_doc_id": None,
-            "processed_chunks": [], "chat_history": [],
-            "summary_images": [], "summary_tables": [],
-            "quiz_questions": [], "logs": [],
-            "all_page_images": {}, "quiz_answers": {},
-            "metrics": {"elements": 0, "chunks": 0, "docs": 0},
-            "pipeline_ran": False, "quiz_submitted": False,
-            "doc_name": "", "anon_uid": "",
-            "auth_screen": "signin", "auth_error": "", "auth_ok": "",
-        }.items():
-            st.session_state[_k] = _v
-        st.rerun()
-
-# shrink just these two buttons — small, subtle, not orange
-st.markdown("""
-<style>
-[data-testid="stHorizontalBlock"]:has([data-testid="stButton"]) + div,
-div:has(> [data-testid="stHorizontalBlock"]) { margin-top: -1rem; }
-section[data-testid="stMain"] > div > div > div:nth-child(4) button,
-section[data-testid="stMain"] > div > div > div:nth-child(5) button {
-    font-size: .72rem !important;
-    padding: .25rem .7rem !important;
-    background: #1a1a1a !important;
-    border: 1px solid #2a2a2a !important;
-    color: #a3a3a3 !important;
-    border-radius: 6px !important;
-    font-weight: 500 !important;
-    min-height: unset !important;
-    height: auto !important;
-    line-height: 1.4 !important;
-    white-space: nowrap !important;
-}
-section[data-testid="stMain"] > div > div > div:nth-child(4) button:hover {
-    border-color: #f97316 !important;
-    color: #f97316 !important;
-}
-section[data-testid="stMain"] > div > div > div:nth-child(5) button:hover {
-    border-color: #ef4444 !important;
-    color: #fca5a5 !important;
-}
-</style>
 """, unsafe_allow_html=True)
 
 # ─── MathJax — only injected after auth passes ───────────
