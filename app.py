@@ -10,8 +10,8 @@ import uuid
 
 # ════════════════════════════════════════════════════════
 # ── BRANDING — edit these lines ──────────────────────────
-BRAND_NAME   = "Sadiq Shehu"           # ← your name or company
-BRAND_LOGO   = "sh1.png"                    # ← path to logo file e.g. "logo.png", or leave ""
+BRAND_NAME   = "Your Name"           # ← your name or company
+BRAND_LOGO   = ""                    # ← path to logo file e.g. "logo.png", or leave ""
 APP_SUBTITLE = "Document Intelligence"
 # ════════════════════════════════════════════════════════
 
@@ -50,7 +50,7 @@ except Exception:
 # ─── Page Config ─────────────────────────────────────────
 st.set_page_config(
     page_title=f"{BRAND_NAME} · {APP_SUBTITLE}",
-    page_icon="sh1.png",
+    page_icon="📄",
     layout="centered",
     initial_sidebar_state="collapsed",
 )
@@ -911,8 +911,8 @@ def db_save_quiz(user_id: str, document_id: str,
         pass
 
 def db_join_waitlist(user_id: str, full_name: str, email: str,
-                     trigger: str, price_range: str) -> bool:
-    """Add user to waitlist. Returns True on success."""
+                     trigger: str, price_range: str) -> tuple[bool, str]:
+    """Add user to waitlist. Returns (success, error_message)."""
     try:
         supabase.table("waitlist").insert({
             "user_id":     user_id,
@@ -921,9 +921,9 @@ def db_join_waitlist(user_id: str, full_name: str, email: str,
             "trigger":     trigger,
             "price_range": price_range,
         }).execute()
-        return True
-    except Exception:
-        return False
+        return True, ""
+    except Exception as e:
+        return False, str(e)
 
 def db_is_on_waitlist(user_id: str) -> bool:
     """Check if user already joined the waitlist."""
@@ -3114,7 +3114,7 @@ with tab_premium:
             if not _wl_name_input.strip() or not _wl_email_input.strip():
                 _wl_error = "Please fill in your name and email."
             else:
-                _ok = db_join_waitlist(
+                _ok, _err = db_join_waitlist(
                     user_id     = _wl_user.id,
                     full_name   = _wl_name_input.strip(),
                     email       = _wl_email_input.strip(),
@@ -3126,7 +3126,7 @@ with tab_premium:
                     st.session_state.upgrade_trigger = ""
                     st.rerun()
                 else:
-                    _wl_error = "Something went wrong — please try again."
+                    _wl_error = f"Failed to join waitlist: {_err}"
 
         if _wl_error:
             st.error(_wl_error)
