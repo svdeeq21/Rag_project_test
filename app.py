@@ -1822,7 +1822,7 @@ if _qp.get("action") == "upgrade":
     st.query_params.clear()
     st.session_state.show_upgrade    = True
     st.session_state.upgrade_trigger = "manual"
-    st.rerun()
+    
 
 # ── brand bar — everything in one HTML row ────────────────
 _upgrade_label = "✓ Waitlisted" if st.session_state.on_waitlist else "⚡ Upgrade"
